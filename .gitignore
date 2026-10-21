@@ -1,0 +1,6 @@
+downloads/
+cfmodsync
+.env
+.mods
+*.exe
+*.log
