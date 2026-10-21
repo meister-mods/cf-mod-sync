@@ -2,7 +2,7 @@
 
 [Korean README](README.kr.md)
 
-Add one CurseForge Minecraft **mod project URL** per line to `mods.txt`. The tool searches each project and downloads the most recently listed JAR that matches the **Minecraft version and Forge loader**.
+Add one CurseForge Minecraft **mod project URL** per line to `.mods`. The tool searches each project and downloads the most recently listed JAR that matches the **Minecraft version and Forge loader**.
 
 - Default target: **Minecraft 1.20.1 / Forge**. Change it with `MC_VERSION` in `.env` or the `-version` flag.
 - Uses the official [CurseForge Core API](https://docs.curseforge.com/rest-api/). It does not scrape web pages, guess `/download/latest` redirects, or hardcode URLs or file IDs.
@@ -30,7 +30,7 @@ Run these commands from the project directory. You can run from source with Go 1
 ```powershell
 Copy-Item .env.example .env
 notepad .env      # Enter CURSEFORGE_API_KEY=...
-notepad mods.txt  # Edit the list of project URLs to download
+notepad .mods     # Edit the list of project URLs to download
 
 go run . -dry-run          # Select compatible latest releases via the API and write plan.json
 go run .                   # Download and validate JARs
@@ -46,13 +46,13 @@ Example configuration (`.env`):
 CURSEFORGE_API_KEY=YOUR_APPROVED_KEY
 MC_VERSION=1.20.1
 RELEASE_CHANNEL=all
-MOD_LIST=mods.txt
+MOD_LIST=.mods
 AUTO_DEPS=true
 ```
 
 If `OUTPUT_DIR` is omitted, downloads are **separated by Minecraft version**, for example in `downloads/1.20.1-forge/`. Changing to 1.21.1 also changes the default directory to `downloads/1.21.1-forge/`.
 
-Example input (`mods.txt`):
+Example input (`.mods`):
 
 ```text
 # One project URL per line. Do not use download/latest, /files/123, or other non-project URLs.
@@ -60,14 +60,14 @@ https://www.curseforge.com/minecraft/mc-mods/create
 https://www.curseforge.com/minecraft/mc-mods/jei
 ```
 
-This package's **`mods.txt` is prefilled with 93 project URLs** compiled earlier. Keep only the mods you want. `mods.example.txt` is a much shorter example.
+This package's **`.mods` is prefilled with 93 project URLs** compiled earlier. Keep only the mods you want. `.mods.example` is a much shorter example.
 
 ## 3. Command-line options
 
 | Option | Description |
 | --- | --- |
 | `-version 1.21.1` | Select a specific Minecraft version instead of the one in `.env` |
-| `-input my-mods.txt` | Use a different project URL list |
+| `-input .mods.example` | Use a different project URL list |
 | `-output ./my-mods` | Use a different JAR output directory |
 | `-channel release` | Select stable releases only (`beta`: release and beta; `all`: includes alpha) |
 | `-deps=false` | Disable automatic addition of required CurseForge dependencies |

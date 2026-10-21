@@ -1,6 +1,6 @@
 # CurseForge Forge 모드 자동 다운로더 (Go)
 
-`mods.txt`에 CurseForge Minecraft **모드 프로젝트 URL**을 한 줄씩 넣으면, 프로젝트를 검색해 **Minecraft 버전 + Forge 로더**에 맞는 가장 최근 등록된 JAR를 다운로드합니다.
+`.mods`에 CurseForge Minecraft **모드 프로젝트 URL**을 한 줄씩 넣으면, 프로젝트를 검색해 **Minecraft 버전 + Forge 로더**에 맞는 가장 최근 등록된 JAR를 다운로드합니다.
 
 - 기본 환경: **Minecraft 1.20.1 / Forge**. `.env`의 `MC_VERSION`이나 `-version`으로 변경할 수 있습니다.
 - 공식 [CurseForge Core API](https://docs.curseforge.com/rest-api/)를 사용합니다. 웹 HTML 스크래핑, `/download/latest` 리다이렉트 추측, URL·파일 ID 하드코딩은 사용하지 않습니다.
@@ -28,7 +28,7 @@
 ```powershell
 Copy-Item .env.example .env
 notepad .env      # CURSEFORGE_API_KEY=... 입력
-notepad mods.txt  # 다운로드할 프로젝트 URL 목록 편집
+notepad .mods     # 다운로드할 프로젝트 URL 목록 편집
 
 go run . -dry-run          # API에서 호환되는 최신 릴리스만 선택하고 plan.json 출력
 go run .                   # JAR 자동 다운로드 + 검증
@@ -44,13 +44,13 @@ go run . -force            # 기존 동일 파일을 안전하게 재다운로�
 CURSEFORGE_API_KEY=YOUR_APPROVED_KEY
 MC_VERSION=1.20.1
 RELEASE_CHANNEL=all
-MOD_LIST=mods.txt
+MOD_LIST=.mods
 AUTO_DEPS=true
 ```
 
 `OUTPUT_DIR`를 생략하면 `downloads/1.20.1-forge/`처럼 **MC 버전별로 분리**합니다. 1.21.1로 변경하면 기본 폴더도 `downloads/1.21.1-forge/`로 변합니다.
 
-입력(`mods.txt`) 예시:
+입력(`.mods`) 예시:
 
 ```text
 # 한 줄에 하나. 프로젝트 URL 이외의 download/latest, /files/123 등을 쓰지 않습니다.
@@ -58,14 +58,14 @@ https://www.curseforge.com/minecraft/mc-mods/create
 https://www.curseforge.com/minecraft/mc-mods/jei
 ```
 
-이 패키지의 **`mods.txt`에는 이전에 정리한 93개 프로젝트 URL**을 미리 채워 두었습니다. 사용자가 원하는 모드만 남겨도 됩니다. `mods.example.txt`는 아주 짧은 예제입니다.
+이 패키지의 **`.mods`에는 이전에 정리한 93개 프로젝트 URL**을 미리 채워 두었습니다. 사용자가 원하는 모드만 남겨도 됩니다. `.mods.example`은 아주 짧은 예제입니다.
 
 ## 3. 명령줄 옵션
 
 | 옵션 | 설명 |
 | --- | --- |
 | `-version 1.21.1` | `.env` 대신 특정 Minecraft 버전 선택 |
-| `-input my-mods.txt` | 프로젝트 URL 목록 파일 변경 |
+| `-input .mods.example` | 프로젝트 URL 목록 파일 변경 |
 | `-output ./my-mods` | JAR 출력 폴더 변경 |
 | `-channel release` | 안정 릴리스만 선택 (`beta`: release+beta, `all`: alpha 포함) |
 | `-deps=false` | CurseForge 필수 의존성 자동 추가 해제 |
