@@ -1,4 +1,4 @@
-# cfmodsync — CurseForge Forge Mod Downloader (Go)
+# CurseForge Forge Mod Downloader (Go)
 
 [Korean README](README.kr.md)
 

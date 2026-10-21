@@ -1,4 +1,4 @@
-# cfmodsync — CurseForge Forge 모드 자동 다운로더 (Go)
+# CurseForge Forge 모드 자동 다운로더 (Go)
 
 `mods.txt`에 CurseForge Minecraft **모드 프로젝트 URL**을 한 줄씩 넣으면, 프로젝트를 검색해 **Minecraft 버전 + Forge 로더**에 맞는 가장 최근 등록된 JAR를 다운로드합니다.
 
