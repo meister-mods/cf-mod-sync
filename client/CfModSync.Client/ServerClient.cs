@@ -16,9 +16,9 @@ public sealed partial class ServerClient : IDisposable
         if (!Uri.TryCreate(address.Trim(), UriKind.Absolute, out var uri) ||
             (uri.Scheme != "http" && uri.Scheme != "https") || uri.UserInfo != "" ||
             uri.Query != "" || uri.Fragment != "" || uri.AbsolutePath != "/")
-            throw new ArgumentException("서버 주소는 http(s)://호스트:포트 형식이어야 합니다.");
+            throw new ArgumentException("Enter a server address in the format http(s)://host:port.");
         if (uri.Scheme == "http" && !uri.IsLoopback)
-            throw new ArgumentException("원격 서버에는 HTTPS를 사용해 주세요. 서버 TLS 또는 HTTPS 역방향 프록시를 설정할 수 있습니다.");
+            throw new ArgumentException("Use HTTPS for remote servers. Configure server TLS or an HTTPS reverse proxy.");
         // An upstream redirect must never carry the server bearer token.
         http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
         {
@@ -34,7 +34,7 @@ public sealed partial class ServerClient : IDisposable
         using var response = await SendAsync(HttpMethod.Get, "api/v1/status", null, cancellation);
         var status = await response.Content.ReadFromJsonAsync<JsonElement>(Protocol.Json, cancellation);
         if (status.GetProperty("protocol_version").GetInt32() != 1)
-            throw new IOException("지원되지 않는 서버 프로토콜입니다.");
+            throw new IOException("The server protocol is not supported.");
     }
 
     public async Task<JobSnapshot> CreateJobAsync(JobRequest request, CancellationToken cancellation)
@@ -65,12 +65,12 @@ public sealed partial class ServerClient : IDisposable
 
     private static void ValidateJobId(string id)
     {
-        if (!JobId().IsMatch(id)) throw new IOException("서버가 유효하지 않은 작업 ID를 반환했습니다.");
+        if (!JobId().IsMatch(id)) throw new IOException("The server returned an invalid job ID.");
     }
 
     private static async Task<JobSnapshot> ReadJob(HttpResponseMessage response, CancellationToken cancellation) =>
         await response.Content.ReadFromJsonAsync<JobSnapshot>(Protocol.Json, cancellation)
-        ?? throw new IOException("서버 작업 응답이 비어 있습니다.");
+        ?? throw new IOException("The server returned an empty job response.");
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? value, CancellationToken cancellation)
     {
@@ -89,9 +89,9 @@ public sealed partial class ServerClient : IDisposable
         if (response.IsSuccessStatusCode) return;
         string detail = response.StatusCode switch
         {
-            HttpStatusCode.Unauthorized => "서버 접속 토큰을 확인해 주세요.",
-            HttpStatusCode.TooManyRequests => "서버가 처리 중인 작업이 많습니다. 잠시 후 다시 시도해 주세요.",
-            _ => response.ReasonPhrase ?? "서버 요청 실패"
+            HttpStatusCode.Unauthorized => "Check your server access token.",
+            HttpStatusCode.TooManyRequests => "The server is busy. Please try again shortly.",
+            _ => response.ReasonPhrase ?? "Server request failed"
         };
         if (response.Content.Headers.ContentLength is > 0 and < 65536)
         {
@@ -121,7 +121,7 @@ public sealed partial class ServerClient : IDisposable
     {
         if (!SafeFilename(file.Filename) || !DownloadRoute().IsMatch(file.DownloadPath) ||
             file.Verified is not { SizeBytes: > 0 } verified || !Sha256().IsMatch(verified.Sha256))
-            throw new IOException("서버가 유효하지 않은 파일 정보를 반환했습니다.");
+            throw new IOException("The server returned invalid file metadata.");
         Directory.CreateDirectory(output);
         var target = Path.Combine(Path.GetFullPath(output), file.Filename);
         if (File.Exists(target) && new FileInfo(target).Length == verified.SizeBytes)
@@ -142,7 +142,7 @@ public sealed partial class ServerClient : IDisposable
             using var response = await http.GetAsync(file.DownloadPath.TrimStart('/'), HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             await EnsureSuccess(response, timeout.Token);
             if (response.Content.Headers.ContentLength is long length && length != verified.SizeBytes)
-                throw new IOException("서버 파일 크기가 작업 정보와 다릅니다.");
+                throw new IOException("The server file size does not match the job metadata.");
             using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             await using (var destination = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
             await using (var source = await response.Content.ReadAsStreamAsync(timeout.Token))
@@ -153,14 +153,14 @@ public sealed partial class ServerClient : IDisposable
                 while ((count = await source.ReadAsync(buffer, timeout.Token)) != 0)
                 {
                     received += count;
-                    if (received > verified.SizeBytes) throw new IOException("파일이 예상 크기를 초과했습니다.");
+                    if (received > verified.SizeBytes) throw new IOException("The file exceeds its expected size.");
                     await destination.WriteAsync(buffer.AsMemory(0, count), timeout.Token);
                     hasher.AppendData(buffer, 0, count);
                     progress?.Report(new(file.Filename, received, verified.SizeBytes));
                 }
                 if (received != verified.SizeBytes ||
                     !Convert.ToHexString(hasher.GetHashAndReset()).Equals(verified.Sha256, StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("다운로드한 파일의 SHA-256 또는 크기 검증에 실패했습니다.");
+                    throw new IOException("The downloaded file failed SHA-256 or size verification.");
                 await destination.FlushAsync(timeout.Token);
             }
             File.Move(temporary, target, true);

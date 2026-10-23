@@ -37,9 +37,9 @@ Server requirements: Go 1.27.3+ when building from source, or the compiled serve
 
    The script builds and tests both components, runs a real C# client against a Go server backed by a mock CurseForge service, and creates `artifacts/cfmodsync-windows.zip`. `-Race` additionally enables Go's race detector when a supported C compiler is installed.
 
-3. In the client, enter the server address and optional **server access token**, then click **연결 확인** (check connection). Select the Minecraft version, release channel, dependencies, and output directory.
-4. Use **목록 가져오기** to import `.mods` or `.mods.example`, paste a project URL, or browse CurseForge. With **모드 링크를 클릭하면 목록에 담기** enabled, clicking a mod project link adds it to the basket. Disable this option to browse project pages, then use **현재 프로젝트 담기** to add the current project.
-5. Click **선택한 모드 다운로드**. Ready files are transferred while the server fills other cache entries. Existing local files are reused only after SHA-256 validation. The client writes `manifest.json` in the output directory.
+3. In the client, enter the server address and optional **server access token**, then click **Connect**. Select the Minecraft version, release channel, dependencies, and output directory.
+4. Use **Import list** to import `.mods` or `.mods.example`, paste a project URL, or browse CurseForge. With **Add mod links when clicked** enabled, clicking a mod project link adds it to the basket. Disable this option to browse project pages, then use **Add current project** to add the current project.
+5. Click **Download selected mods**. Ready files are transferred while the server fills other cache entries. Existing local files are reused only after SHA-256 validation. The client writes `manifest.json` in the output directory.
 
 The basket and connection settings are saved in `%LOCALAPPDATA%\cfmodsync\settings.json`. The access token is kept only for the current session. WebView2 data is stored beside the settings. You can also open a list directly with `CfModSync.Client.exe "C:\path\.mods"`.
 
@@ -63,7 +63,7 @@ Listening outside loopback requires a `SERVER_TOKEN` of at least 32 characters. 
 ### Cache behavior and API
 
 - JARs and their verification metadata live in `cache/files/<mod-id>/<file-id>/`. Latest-file selections live in `cache/selections/`. Both survive server restarts.
-- An unexpired selection cache and valid JARs need no upstream API or CDN requests. A client can force a metadata refresh with **최신 목록 다시 확인**. After the metadata TTL expires, the server checks CurseForge for newer compatible files.
+- An unexpired selection cache and valid JARs need no upstream API or CDN requests. A client can force a metadata refresh with **Refresh latest files**. After the metadata TTL expires, the server checks CurseForge for newer compatible files.
 - Concurrent requests for the same file share one upstream download. Cancelling one job does not cancel a shared cache fill needed by another client.
 - Cache fills use temporary files, API SHA-1/MD5 checksums, and ZIP/CRC validation. Cached files are revalidated before delivery; damaged cache entries are repaired on the next job.
 - Jobs support progress, per-file errors, and cancellation. The server allows eight active jobs and retains at most 128 jobs; completed records expire after `-job-ttl` when new jobs arrive. Job IDs do not survive restarts; resubmit the list to reuse persistent files.

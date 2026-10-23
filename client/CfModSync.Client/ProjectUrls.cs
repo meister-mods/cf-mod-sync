@@ -18,10 +18,10 @@ public static partial class ProjectUrls
         if (!Uri.TryCreate(raw.Trim().TrimStart('\uFEFF'), UriKind.Absolute, out var uri) ||
             uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort || uri.UserInfo != "" ||
             (uri.Host != "www.curseforge.com" && uri.Host != "curseforge.com"))
-            throw new FormatException("CurseForge Minecraft 모드 프로젝트 URL을 입력해 주세요.");
+            throw new FormatException("Enter a CurseForge Minecraft mod project URL.");
         var match = ProjectPath().Match(uri.AbsolutePath);
         if (!match.Success)
-            throw new FormatException("모드 프로젝트 링크만 담을 수 있습니다.");
+            throw new FormatException("Only mod project links can be added.");
         return "https://www.curseforge.com/minecraft/mc-mods/" + match.Groups[1].Value;
     }
 
@@ -35,10 +35,10 @@ public static partial class ProjectUrls
             var line = raw.Trim().TrimStart('\uFEFF');
             if (line == "" || line.StartsWith('#')) continue;
             try { urls.Add(Normalize(line)); }
-            catch (FormatException error) { throw new FormatException($"{lineNumber}번째 줄: {error.Message}"); }
+            catch (FormatException error) { throw new FormatException($"Line {lineNumber}: {error.Message}"); }
         }
         if (urls.Count is 0 or > 500)
-            throw new FormatException("모드 목록에는 1~500개의 프로젝트가 필요합니다.");
+            throw new FormatException("A mod list must contain between 1 and 500 projects.");
         return urls.ToArray();
     }
 }
