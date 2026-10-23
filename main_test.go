@@ -282,12 +282,12 @@ func TestZipCRCDetectsCorruption(t *testing.T) {
 	}
 }
 
-func TestPreviousProjectURLList(t *testing.T) {
-	slugs, err := loadModSlugs("mods.txt")
+func TestExampleProjectURLList(t *testing.T) {
+	slugs, err := loadModSlugs(".mods.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(slugs) != 93 {
-		t.Fatalf("expected 93 input project URLs, got %d", len(slugs))
+	if len(slugs) != 3 {
+		t.Fatalf("expected 3 example project URLs, got %d", len(slugs))
 	}
 }

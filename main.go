@@ -22,10 +22,13 @@ func run() error {
 	if err := loadDotEnv(".env"); err != nil {
 		return err
 	}
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		return runServer(os.Args[2:])
+	}
 	cfg := Options{}
 	flag.StringVar(&cfg.Version, "version", envDefault("MC_VERSION", "1.20.1"), "Minecraft version")
 	flag.StringVar(&cfg.Channel, "channel", envDefault("RELEASE_CHANNEL", "all"), "release, beta, or all (includes alpha)")
-	flag.StringVar(&cfg.Input, "input", envDefault("MOD_LIST", "mods.txt"), "text file containing CurseForge mod project URLs")
+	flag.StringVar(&cfg.Input, "input", envDefault("MOD_LIST", ".mods"), "text file containing CurseForge mod project URLs")
 	flag.StringVar(&cfg.Output, "output", envDefault("OUTPUT_DIR", ""), "directory for downloaded JARs (default: downloads/<version>-forge)")
 	flag.BoolVar(&cfg.Deps, "deps", envBool("AUTO_DEPS", true), "automatically include required dependencies")
 	flag.BoolVar(&cfg.Force, "force", false, "re-download / safely replace existing filenames")

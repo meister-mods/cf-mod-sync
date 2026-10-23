@@ -281,7 +281,12 @@ func releaseAllowed(release int, channel string) bool {
 }
 
 func safeJarName(name string) bool {
-	if name == "" || !jarNamePattern.MatchString(name) || name == "." || name == ".." || strings.HasPrefix(name, ".") {
+	if name == "" || len(name) > 240 || !jarNamePattern.MatchString(name) || name == "." || name == ".." || strings.HasPrefix(name, ".") {
+		return false
+	}
+	stem := strings.ToUpper(strings.SplitN(name, ".", 2)[0])
+	if stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+		(len(stem) == 4 && (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && stem[3] >= '1' && stem[3] <= '9') {
 		return false
 	}
 	return !strings.ContainsAny(name, "/\\:*?\"<>|\x00\r\n\t")

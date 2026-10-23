@@ -1,4 +1,98 @@
-# CurseForge Forge 모드 자동 다운로더 (Go)
+# cfmodsync — 캐시 서버와 Windows 클라이언트
+
+[English README](README.md)
+
+**Go 캐시 서버**와 **CurseForge 웹뷰를 내장한 C# WinForms 클라이언트**로 구성되어 있습니다. CurseForge API 키는 서버에 설정합니다. 클라이언트는 프로젝트 URL을 전달하고, 서버에서 검증된 JAR 파일을 받습니다.
+
+```mermaid
+flowchart LR
+    List[".mods 파일 / 웹사이트에서 고른 링크"] --> Client["Windows 클라이언트"]
+    Client -->|"프로젝트 URL + Minecraft 버전"| Server["Go API 서버"]
+    Server -->|"API 키 · 캐시 없음"| CurseForge["CurseForge API / CDN"]
+    CurseForge -->|"JAR 검증"| Cache["서버 영구 캐시"]
+    Cache -->|"준비된 파일부터 전달"| Client
+    Client -->|"SHA-256 검증"| Output["로컬 JAR + manifest.json"]
+```
+
+## 서버·클라이언트 빠른 시작
+
+서버를 소스로 빌드하려면 Go 1.27.3 이상이 필요합니다. 빌드된 서버 실행 파일을 사용해도 됩니다. 클라이언트 빌드에는 Windows와 .NET 10 SDK가 필요하며, 실행에는 [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/ko-kr/download/dotnet/10.0)과 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)이 필요합니다.
+
+1. **서버**에서 `.env`를 만들고 `CURSEFORGE_API_KEY`를 설정합니다.
+
+   ```powershell
+   Copy-Item .env.example .env
+   notepad .env
+   go run . serve
+   ```
+
+   기본 주소는 `http://127.0.0.1:8080`, 캐시 경로는 `cache/`입니다. 모드 목록은 클라이언트에서 전달하므로 서버에 `.mods` 파일을 둘 필요는 없습니다.
+
+2. 저장소 루트에서 두 구성요소를 빌드합니다.
+
+   ```powershell
+   .\scripts\build.ps1
+   .\artifacts\client\CfModSync.Client.exe
+   ```
+
+   빌드 스크립트는 서버·클라이언트를 빌드하고 테스트한 뒤 `artifacts/cfmodsync-windows.zip`을 만듭니다. 모의 CurseForge 서비스를 사용하는 Go 서버에 실제 C# 클라이언트를 연결하는 통합 검사도 포함됩니다. 지원되는 C 컴파일러가 설치된 환경에서는 `-Race` 옵션으로 Go 경쟁 상태 검사도 실행할 수 있습니다.
+
+3. 클라이언트에서 서버 주소와 필요한 경우 **서버 접속 토큰**을 입력하고 **연결 확인**을 누릅니다. Minecraft 버전, 배포 채널, 의존성 포함 여부, 저장 폴더를 선택합니다.
+4. **목록 가져오기**로 `.mods` 또는 `.mods.example`을 불러오거나 프로젝트 URL을 붙여 넣습니다. 웹뷰의 **모드 링크를 클릭하면 목록에 담기**를 켜면 모드 프로젝트 링크를 클릭해 목록에 추가할 수 있습니다. 프로젝트 페이지를 탐색하려면 이 옵션을 끄고, 원하는 페이지에서 **현재 프로젝트 담기**를 누르세요.
+5. **선택한 모드 다운로드**를 누릅니다. 서버에서 다른 파일의 캐시를 채우는 동안에도 준비된 파일부터 받습니다. 기존 로컬 파일은 SHA-256 검증 후 재사용하며, 저장 폴더에 `manifest.json`을 기록합니다.
+
+선택한 모드와 접속 설정은 `%LOCALAPPDATA%\cfmodsync\settings.json`에 저장합니다. 접속 토큰은 현재 실행 중인 세션에만 유지합니다. WebView2 데이터는 설정 파일 옆에 저장합니다. `CfModSync.Client.exe "C:\경로\.mods"`로 목록 파일을 바로 열 수도 있습니다.
+
+### 서버 배포와 인증
+
+배포 파일은 `server/`와 `client/` 폴더로 나뉩니다. 서버 컴퓨터에서 `server/.env.example`을 `server/.env`로 복사하고 API 키를 설정한 뒤, 해당 폴더에서 `Start-Server.ps1` 또는 `cfmodsync.exe serve`를 실행합니다. Windows 사용자에게는 `client/` 폴더 전체를 전달합니다. 서버의 `.env`는 배포에 포함하지 마세요.
+
+| 서버 옵션 | 기본값 | 설명 |
+| --- | --- | --- |
+| `-listen` / `SERVER_LISTEN` | `127.0.0.1:8080` | 수신 주소 |
+| `-cache` / `SERVER_CACHE_DIR` | `cache` | 영구 캐시 폴더 |
+| `-token` / `SERVER_TOKEN` | 루프백에서는 빈 값 | CurseForge 키와 별개인 클라이언트 접속 토큰 |
+| `-workers` | `4` | 서버 전체의 동시 원본 다운로드 수, 1~16 |
+| `-max-file-mb` | `1024` | JAR당 최대 크기, MiB |
+| `-metadata-ttl` | `15m` | 최신 파일 선택 결과를 재사용할 시간 |
+| `-job-ttl` | `1h` | 완료된 작업을 메모리에 유지할 시간 |
+| `-tls-cert` / `-tls-key` | 빈 값 | HTTPS 인증서와 개인 키 PEM 파일 |
+
+루프백 외부 주소에서 수신하려면 32자 이상의 `SERVER_TOKEN`이 필요합니다. 서버 환경변수나 `.env`에 설정하세요. 원격 클라이언트 연결에는 `-tls-cert`·`-tls-key` 또는 HTTPS 역방향 프록시를 사용합니다. 클라이언트는 루프백 주소에만 일반 HTTP를 허용합니다. 접속 토큰은 `Authorization: Bearer ...` 헤더로 전달합니다. 서버 API는 웹사이트에서 발생한 Origin 요청을 거부하며, CurseForge API 키와 원본 다운로드 URL을 클라이언트에 제공하지 않습니다.
+
+### 캐시 동작과 API
+
+- JAR과 검증 정보는 `cache/files/<모드 ID>/<파일 ID>/`에, 최신 파일 선택 결과는 `cache/selections/`에 저장합니다. 서버를 재시작해도 유지됩니다.
+- 선택 결과가 유효기간 안에 있고 JAR이 정상이라면 원본 API·CDN 요청 없이 전달합니다. **최신 목록 다시 확인**으로 선택 결과를 갱신할 수 있습니다. 기본 15분이 지나면 다음 요청에서 더 최신의 호환 파일을 확인합니다.
+- 같은 파일의 동시 요청은 원본 다운로드 한 건을 공유합니다. 한 작업을 취소해도 다른 클라이언트가 필요한 공유 캐시 다운로드는 중단하지 않습니다.
+- 임시 파일 다운로드 후 API의 SHA-1/MD5와 ZIP/CRC를 검증합니다. 캐시도 전달 전에 재검증하며, 손상된 캐시는 다음 작업에서 복구합니다.
+- 작업 진행률, 파일별 오류, 취소를 지원합니다. 동시 작업은 8개, 보관 작업은 최대 128개입니다. 새 작업을 받을 때 `-job-ttl`이 지난 완료 기록을 정리합니다. 작업 ID는 재시작 시 사라지지만 목록을 다시 요청하면 영구 캐시를 재사용합니다.
+- 현재 버전은 오래된 서버 캐시나 클라이언트 저장 폴더의 이전 JAR을 자동 삭제하지 않습니다. 디스크 여유를 확인하고 Minecraft 버전별 저장 폴더를 사용하세요. 지원 로더는 Minecraft **Forge**입니다.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/healthz` | 공개 상태 확인 |
+| `GET` | `/api/v1/status` | 인증 및 프로토콜 연결 확인 |
+| `POST` | `/api/v1/jobs` | 작업 생성, `202`와 작업 ID 반환 |
+| `GET` | `/api/v1/jobs/{id}` | 진행률과 준비된 파일 경로 조회 |
+| `DELETE` | `/api/v1/jobs/{id}` | 작업 취소 |
+| `GET` | `/api/v1/files/{modId}/{fileId}` | 검증된 캐시 JAR 전달, HTTP Range 지원 |
+
+작업 요청 본문 예시입니다. 프로젝트 URL은 프로젝트 루트 주소여야 합니다.
+
+```json
+{
+  "project_urls": ["https://www.curseforge.com/minecraft/mc-mods/jei"],
+  "minecraft_version": "1.20.1",
+  "release_channel": "release",
+  "include_dependencies": true,
+  "refresh": false
+}
+```
+
+작업 상태는 `queued`, `resolving`, `caching`, `completed`, `failed`, `cancelled`입니다. 준비된 파일에는 상대 경로인 `download_path`와 `verified.sha256`·`verified.size_bytes`가 포함됩니다. 일부 프로젝트가 실패해도 준비된 다른 파일을 받을 수 있습니다. 파일 선택 전에 배포 허용 여부를 검사하며, 캐시된 선택 결과는 메타데이터 유효기간까지 재사용합니다.
+
+## 단독 CLI 사용
 
 `.mods`에 CurseForge Minecraft **모드 프로젝트 URL**을 한 줄씩 넣으면, 프로젝트를 검색해 **Minecraft 버전 + Forge 로더**에 맞는 가장 최근 등록된 JAR를 다운로드합니다.
 
@@ -23,10 +117,11 @@
 
 ## 2. 설치 및 사용 (Windows PowerShell)
 
-프로젝트 파일이 있는 폴더에서 실행합니다. Go 1.23 이상이 설치되어 있으면 소스로 실행할 수 있습니다. Windows `.exe` 빌드 파일도 별도 제공됩니다.
+프로젝트 파일이 있는 폴더에서 실행합니다. Go 1.27.3 이상이 설치되어 있으면 소스로 실행할 수 있습니다. Windows `.exe` 빌드 파일도 별도 제공됩니다.
 
 ```powershell
 Copy-Item .env.example .env
+if (!(Test-Path .mods)) { Copy-Item .mods.example .mods }
 notepad .env      # CURSEFORGE_API_KEY=... 입력
 notepad .mods     # 다운로드할 프로젝트 URL 목록 편집
 
@@ -58,7 +153,7 @@ https://www.curseforge.com/minecraft/mc-mods/create
 https://www.curseforge.com/minecraft/mc-mods/jei
 ```
 
-이 패키지의 **`.mods`에는 이전에 정리한 93개 프로젝트 URL**을 미리 채워 두었습니다. 사용자가 원하는 모드만 남겨도 됩니다. `.mods.example`은 아주 짧은 예제입니다.
+`.mods.example`에는 예제 프로젝트 세 개가 들어 있습니다. `.mods`로 복사해 원하는 프로젝트를 남기거나 기존 목록을 사용하세요. `.mods`는 로컬 파일이며 Git에서 제외됩니다.
 
 ## 3. 명령줄 옵션
 
@@ -91,7 +186,7 @@ https://www.curseforge.com/minecraft/mc-mods/jei
 
 ## 5. 한계 및 주의사항
 
-- **공식 API 키 없이는 실제 외부 다운로드 검증이 불가능합니다.** 코드는 로컬 모의 HTTP 서버를 이용해 단위·통합 테스트했습니다. 실제 93개 프로젝트의 API 응답과 바이너리 다운로드는 인증된 키가 없어 실행하지 않았습니다.
+- **실제 다운로드에는 승인된 유효 API 키가 필요합니다.** 자동화 테스트는 로컬 모의 HTTP/TLS 서버를 사용하며, C# 클라이언트와 Go 서버 간 실제 파일 전송도 검사합니다. 실제 API·CDN 접근은 설정한 키와 프로젝트별 배포 허용 여부에 따라 결정됩니다.
 - 태그 호환성은 API 게시자가 제공한 메타데이터에 의존하며, `mods.toml` 안의 Forge 최소 버전·다른 모드의 버전 범위·충돌 여부까지 자동으로 해결하지는 않습니다.
 - **차량 콘텐츠 팩과 번들 프로젝트**는 같은 CurseForge 프로젝트에서 최신 버전의 팩 계열 자체가 바뀔 수 있습니다. 예: Blue Seoul Vehicles에서 Garam → Narae 계열. 프로젝트 전체의 `1.20.1/Forge 최신`이 설치했던 팩의 후계 버전임을 보장하지 않습니다. 필요한 경우 특정 파일을 수동으로 고정하세요.
 - `RELEASE_CHANNEL=all`은 alpha/beta까지 포함하므로 실제 플레이용은 필요에 따라 `beta` 또는 `release`로 제한하는 편이 안전합니다. 다만 snapshot/alpha만 배포하는 프로젝트는 선택되지 않을 수 있습니다.
@@ -109,3 +204,5 @@ go build -o cfmodsync .
 ```
 
 테스트 항목: URL 파싱, 최신 파일 선택, Minecraft 버전/로더 배제, 배포 채널, SHA-1 무결성, ZIP CRC, API 모의 서버 통합 다운로드, 필수 의존성 추가, 재실행 캐시 및 손상 파일 복구, 인증 헤더의 크로스 도메인 리다이렉트 차단.
+
+Go 경쟁 상태 검사에는 CGO와 지원되는 C 컴파일러가 필요합니다. 해당 환경이 없으면 `go test ./...`를 사용하세요. `scripts/build.ps1`은 서버 캐시·인증·동시 요청 검사와 C# 다운로드 통합 검사도 실행합니다. Windows 클라이언트만 빌드하려면 `dotnet build client/CfModSync.Client/CfModSync.Client.csproj -c Release`를 사용합니다.

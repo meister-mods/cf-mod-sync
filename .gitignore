@@ -4,3 +4,8 @@ cfmodsync
 .mods
 *.exe
 *.log
+cache/
+artifacts/
+.build/
+**/bin/
+**/obj/
