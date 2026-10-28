@@ -148,6 +148,7 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, tar
 		}
 		// Never print the API key or the full CDN URL in errors.
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		detail = []byte(upstreamURLPattern.ReplaceAllString(strings.ReplaceAll(string(detail), c.Key, "[redacted]"), "[upstream URL]"))
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 			return fmt.Errorf("CurseForge API rejected credentials (%d); check CURSEFORGE_API_KEY / distribution permissions", resp.StatusCode)
@@ -333,4 +334,17 @@ func (c *Client) getDownloadURL(ctx context.Context, modID, fileID int64) (strin
 		return "", errors.New("CurseForge returned invalid or insecure download URL")
 	}
 	return *resp.Data, nil
+}
+
+func (c *Client) getFile(ctx context.Context, modID, fileID int64) (File, error) {
+	var response struct {
+		Data File `json:"data"`
+	}
+	if err := c.getJSON(ctx, fmt.Sprintf("/mods/%d/files/%d", modID, fileID), nil, &response); err != nil {
+		return File{}, err
+	}
+	if response.Data.ID != fileID || response.Data.ModID != modID {
+		return File{}, errors.New("pinned file does not belong to the requested project")
+	}
+	return response.Data, nil
 }

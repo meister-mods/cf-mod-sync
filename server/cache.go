@@ -21,8 +21,10 @@ type cachedSelection struct {
 }
 
 type selectionRecord struct {
-	CreatedAt time.Time         `json:"created_at"`
-	Items     []cachedSelection `json:"items"`
+	PolicyVersion int               `json:"policy_version"`
+	Warnings      []Issue           `json:"warnings,omitempty"`
+	CreatedAt     time.Time         `json:"created_at"`
+	Items         []cachedSelection `json:"items"`
 }
 
 type cacheFlight struct {
@@ -31,13 +33,7 @@ type cacheFlight struct {
 	err   error
 }
 
-func (s *modServer) resolveCached(ctx context.Context, slugs []string, options Options, refresh bool) ([]selected, []Issue, bool) {
-	select {
-	case s.planSlot <- struct{}{}:
-		defer func() { <-s.planSlot }()
-	case <-ctx.Done():
-		return nil, []Issue{{Project: "execution", Error: ctx.Err().Error()}}, false
-	}
+func (s *modServer) resolveCached(ctx context.Context, slugs []string, options Options, refresh bool) ([]selected, []Issue, []Issue, bool) {
 	sorted := append([]string{}, slugs...)
 	sort.Strings(sorted)
 	keyData, _ := json.Marshal(struct {
@@ -45,30 +41,49 @@ func (s *modServer) resolveCached(ctx context.Context, slugs []string, options O
 		Version string
 		Channel string
 		Deps    bool
-	}{sorted, options.Version, options.Channel, options.Deps})
+		Forge   string
+		Pins    map[string]int64
+		Policy  int
+	}{sorted, options.Version, options.Channel, options.Deps, options.ForgeVersion, options.PinnedFiles, 6})
 	sum := sha256.Sum256(keyData)
 	path := filepath.Join(s.cfg.CacheDir, "selections", hex.EncodeToString(sum[:])+".json")
-	var saved selectionRecord
-	if !refresh && readCacheJSON(path, &saved) == nil && len(saved.Items) > 0 &&
-		time.Since(saved.CreatedAt) >= 0 && time.Since(saved.CreatedAt) < s.cfg.MetadataTTL {
-		var result []selected
-		valid := len(saved.Items) <= 500
-		for _, item := range saved.Items {
-			if item.Mod.ID <= 0 || item.File.ID <= 0 || !safeJarName(item.File.FileName) ||
-				!item.Mod.IsAvailable || !item.Mod.AllowModDistribution ||
-				!hasGameVersion(item.File, options.Version) || !loaderCompatible(item.File) ||
-				!releaseAllowed(item.File.ReleaseType, options.Channel) {
-				valid = false
+	readPlan := func() ([]selected, []Issue, bool) {
+		var saved selectionRecord
+		if !refresh && readCacheJSON(path, &saved) == nil && saved.PolicyVersion == 6 && len(saved.Items) > 0 &&
+			time.Since(saved.CreatedAt) >= 0 && time.Since(saved.CreatedAt) < s.cfg.MetadataTTL {
+			var result []selected
+			valid := len(saved.Items) <= 500
+			for _, item := range saved.Items {
+				if item.Mod.ID <= 0 || item.File.ID <= 0 || !safeJarName(item.File.FileName) ||
+					!item.Mod.IsAvailable || !item.Mod.AllowModDistribution ||
+					!hasGameVersion(item.File, options.Version) || !loaderCompatible(item.File) ||
+					(!releaseAllowed(item.File.ReleaseType, options.Channel) && options.PinnedFiles[item.Mod.Slug] != item.File.ID) {
+					valid = false
+				}
+				result = append(result, selected{mod: item.Mod, file: item.File, requested: item.Requested})
 			}
-			result = append(result, selected{mod: item.Mod, file: item.File, requested: item.Requested})
+			if valid && len(missingRequested(slugs, preparedEntries(result), nil)) == 0 {
+				return result, saved.Warnings, true
+			}
 		}
-		if valid {
-			return result, nil, true
-		}
+		return nil, nil, false
 	}
-	result, issues := resolveMods(ctx, s.client, slugs, options)
+	// Warm plans must remain available while an unrelated cold scan is running.
+	if result, warnings, ok := readPlan(); ok {
+		return result, nil, warnings, true
+	}
+	select {
+	case s.planSlot <- struct{}{}:
+		defer func() { <-s.planSlot }()
+	case <-ctx.Done():
+		return nil, []Issue{{Project: "execution", Error: ctx.Err().Error()}}, nil, false
+	}
+	if result, warnings, ok := readPlan(); ok {
+		return result, nil, warnings, true
+	}
+	result, issues, warnings := resolveCompatible(ctx, s.client, slugs, options, s.ensureFile)
 	if len(issues) == 0 && len(result) > 0 {
-		record := selectionRecord{CreatedAt: time.Now().UTC()}
+		record := selectionRecord{CreatedAt: time.Now().UTC(), PolicyVersion: 6, Warnings: warnings}
 		for _, item := range result {
 			// Persist metadata only, never signed CDN URLs or API credentials.
 			item.file.DownloadURL = ""
@@ -78,7 +93,7 @@ func (s *modServer) resolveCached(ctx context.Context, slugs []string, options O
 			issues = append(issues, Issue{Project: "selection cache", Error: err.Error()})
 		}
 	}
-	return result, issues, false
+	return result, issues, warnings, false
 }
 
 func (s *modServer) fileDir(modID, fileID int64) string {
@@ -86,6 +101,9 @@ func (s *modServer) fileDir(modID, fileID int64) string {
 }
 
 func (s *modServer) ensureFile(ctx context.Context, selection selected) (Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return Entry{}, err
+	}
 	key := fmt.Sprintf("%d/%d", selection.mod.ID, selection.file.ID)
 	s.mu.Lock()
 	flight := s.flights[key]
@@ -97,13 +115,7 @@ func (s *modServer) ensureFile(ctx context.Context, selection selected) (Entry, 
 		go func() {
 			workCtx, cancel := context.WithTimeout(s.ctx, 30*time.Minute)
 			defer cancel()
-			select {
-			case s.slots <- struct{}{}:
-				flight.entry, flight.err = s.fillFile(workCtx, selection)
-				<-s.slots
-			case <-workCtx.Done():
-				flight.err = workCtx.Err()
-			}
+			flight.entry, flight.err = s.fillFile(workCtx, selection)
 			s.mu.Lock()
 			delete(s.flights, key)
 			close(flight.done)
@@ -133,7 +145,10 @@ func (s *modServer) fillFile(ctx context.Context, selection selected) (Entry, er
 		entry.Status = "cached"
 		entry.Verified = &verified
 	} else {
-		if ctx.Err() != nil {
+		select {
+		case s.slots <- struct{}{}:
+			defer func() { <-s.slots }()
+		case <-ctx.Done():
 			return entry, ctx.Err()
 		}
 		source, err := s.client.getDownloadURL(ctx, entry.ModID, entry.FileID)
@@ -149,6 +164,11 @@ func (s *modServer) fillFile(ctx context.Context, selection selected) (Entry, er
 		entry.Status = status
 		entry.Verified = &verified
 	}
+	metadata, err := inspectJarMetadata(path)
+	if err != nil {
+		return entry, fmt.Errorf("JAR metadata: %w", err)
+	}
+	entry.Metadata = metadata
 	if err := writeCacheJSON(filepath.Join(dir, "entry.json"), entry); err != nil {
 		return entry, err
 	}

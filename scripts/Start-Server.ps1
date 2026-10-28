@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 $serverRoot = $PSScriptRoot
 $serverExe = Join-Path $serverRoot "cfmodsync.exe"
 if (-not (Test-Path -LiteralPath $serverExe)) {
-    $serverRoot = Split-Path -Parent $PSScriptRoot
+    $serverRoot = Join-Path (Split-Path -Parent $PSScriptRoot) "server"
 }
 Push-Location $serverRoot
 try {

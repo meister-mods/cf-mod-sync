@@ -283,7 +283,7 @@ func TestZipCRCDetectsCorruption(t *testing.T) {
 }
 
 func TestExampleProjectURLList(t *testing.T) {
-	slugs, err := loadModSlugs(".mods.example")
+	slugs, err := loadModSlugs("../client/.mods.example")
 	if err != nil {
 		t.Fatal(err)
 	}

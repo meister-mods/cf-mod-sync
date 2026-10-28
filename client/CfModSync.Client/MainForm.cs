@@ -11,6 +11,19 @@ public sealed class MainForm : Form
     private readonly TextBox serverAddress = new() { Text = "http://127.0.0.1:8080", Dock = DockStyle.Fill };
     private readonly TextBox serverToken = new() { UseSystemPasswordChar = true, Dock = DockStyle.Fill };
     private readonly TextBox minecraftVersion = new() { Text = "1.20.1", Width = 95 };
+    private readonly ComboBox forgeVersion = new() { Width = 110, DropDownStyle = ComboBoxStyle.DropDown, MaxLength = 32 };
+    private readonly TextBox installedFolder = new() { Dock = DockStyle.Fill, PlaceholderText = "Optional: existing mods folder for comparison (read only)" };
+    private readonly CheckBox allowReviewedChanges = new() { Text = "Allow reviewed replacements", AutoSize = true };
+    private readonly ToolTip tips = new();
+    private readonly TabControl basketTabs = new() { Dock = DockStyle.Fill };
+    private readonly TabPage reportTab = new("Validation report");
+    private readonly DataGridView reportGrid = new()
+    {
+        Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
+        RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells, BackgroundColor = Color.White,
+        BorderStyle = BorderStyle.None, SelectionMode = DataGridViewSelectionMode.FullRowSelect
+    };
     private readonly ComboBox channel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90 };
     private readonly CheckBox dependencies = new() { Text = "Include required dependencies", Checked = true, AutoSize = true };
     private readonly CheckBox refresh = new() { Text = "Refresh latest files", AutoSize = true };
@@ -18,7 +31,7 @@ public sealed class MainForm : Form
     private readonly TextBox browserAddress = new() { Dock = DockStyle.Fill, Text = "https://www.curseforge.com/minecraft/search?class=mc-mods" };
     private readonly CheckBox pickLinks = new() { Text = "Add mod links when clicked", Checked = true, AutoSize = true };
     private readonly TextBox projectInput = new() { Dock = DockStyle.Fill, PlaceholderText = "Paste a CurseForge mod URL" };
-    private readonly ListBox basket = new() { Dock = DockStyle.Fill, SelectionMode = SelectionMode.MultiExtended, IntegralHeight = false };
+    private readonly ListBox basket = new() { Dock = DockStyle.Fill, SelectionMode = SelectionMode.MultiExtended, IntegralHeight = false, Sorted = true };
     private readonly Label basketCount = new() { Text = "Selected mods · 0", AutoSize = true, Font = new("Segoe UI", 12, FontStyle.Bold) };
     private readonly Label status = new() { Text = "Add mods to the list, then start downloading.", Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
     private readonly TextBox log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
@@ -41,8 +54,8 @@ public sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.None;
         if (args.Length == 2 && args[0] == "--smoke-test") smokeDirectory = Path.GetFullPath(args[1]);
         Text = "cfmodsync · CurseForge Mod Downloader";
-        Size = new Size(1280, 900);
-        MinimumSize = new Size(1060, 760);
+        Size = new Size(1320, 940);
+        MinimumSize = new Size(1100, 820);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10);
         BackColor = Color.FromArgb(244, 246, 249);
@@ -53,23 +66,29 @@ public sealed class MainForm : Form
             Location = new Point(-20000, -20000);
         }
         channel.Items.AddRange(["all", "beta", "release"]);
-        channel.SelectedIndex = 0;
+        channel.SelectedItem = "release";
         cancel.Enabled = false;
+        foreach (var control in new Control[] { serverAddress, serverToken, minecraftVersion, forgeVersion, channel, output, installedFolder, browserAddress, projectInput })
+        {
+            control.Dock = DockStyle.None;
+            control.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        }
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(18) };
-        foreach (var height in new float[] { 64, 45, 42, 44 }) root.RowStyles.Add(new(SizeType.Absolute, height));
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 8, Padding = new Padding(18) };
+        root.ColumnStyles.Add(new(SizeType.Percent, 100));
+        foreach (var height in new float[] { 64, 44, 42, 44, 44, 44 }) root.RowStyles.Add(new(SizeType.Absolute, height));
         root.RowStyles.Add(new(SizeType.Percent, 100));
         root.RowStyles.Add(new(SizeType.Absolute, 148));
         Controls.Add(root);
         var heading = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
         heading.Controls.Add(new Label { Text = "cfmodsync", Font = new Font("Segoe UI", 21, FontStyle.Bold), AutoSize = true, Margin = Padding.Empty });
-        heading.Controls.Add(new Label { Text = "Pick mods on CurseForge and download them from the server cache.", ForeColor = Color.DimGray, AutoSize = true });
+        heading.Controls.Add(new Label { Text = "Select your Forge version. Review compatibility before downloading.", ForeColor = Color.DimGray, AutoSize = true });
         root.Controls.Add(heading, 0, 0);
 
         var connection = Table(5);
-        connection.ColumnStyles.Add(new(SizeType.Absolute, 75));
+        connection.ColumnStyles.Add(new(SizeType.Absolute, 120));
         connection.ColumnStyles.Add(new(SizeType.Percent, 58));
-        connection.ColumnStyles.Add(new(SizeType.Absolute, 90));
+        connection.ColumnStyles.Add(new(SizeType.Absolute, 110));
         connection.ColumnStyles.Add(new(SizeType.Percent, 42));
         connection.ColumnStyles.Add(new(SizeType.Absolute, 110));
         connection.Controls.Add(Caption("Server"), 0, 0);
@@ -80,13 +99,24 @@ public sealed class MainForm : Form
         check.Click += async (_, _) => await CheckConnectionAsync(check);
         connection.Controls.Add(check, 4, 0);
         root.Controls.Add(connection, 0, 1);
-        new ToolTip().SetToolTip(serverToken, "Enter the server's SERVER_TOKEN. Keep the CurseForge API key on the server. This token is not saved.");
+        tips.SetToolTip(serverToken, "Enter the server's SERVER_TOKEN. Keep the CurseForge API key on the server. This token is not saved.");
+        tips.SetToolTip(forgeVersion, "Enter the exact installed Forge version. The server inspects JAR requirements and selects the highest compatible mod versions.");
+        tips.SetToolTip(allowReviewedChanges, "Use only after reviewing missing mods, downgrades, and replacements in the Validation report. This approval applies to one request.");
+        tips.SetToolTip(channel, "release: stable API releases only. beta: release and beta. all: includes alpha. A pinned file is an explicit override.");
 
-        var profile = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
-        profile.Controls.AddRange([Caption("Minecraft"), minecraftVersion, Caption("Forge / Channel"), channel, dependencies, refresh]);
+        var profile = Table(7);
+        foreach (var width in new float[] { 120, 110, 110, 110, 110, 110 }) profile.ColumnStyles.Add(new(SizeType.Absolute, width));
+        profile.ColumnStyles.Add(new(SizeType.Percent, 100));
+        profile.Controls.Add(Caption("Minecraft"), 0, 0);
+        profile.Controls.Add(minecraftVersion, 1, 0);
+        profile.Controls.Add(Caption("Forge version"), 2, 0);
+        profile.Controls.Add(forgeVersion, 3, 0);
+        profile.Controls.Add(Caption("Release policy"), 4, 0);
+        profile.Controls.Add(channel, 5, 0);
+        profile.Controls.Add(new Label { Text = "Highest compatible versions", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray, AutoEllipsis = true }, 6, 0);
         root.Controls.Add(profile, 0, 2);
         var outputRow = Table(3);
-        outputRow.ColumnStyles.Add(new(SizeType.Absolute, 75));
+        outputRow.ColumnStyles.Add(new(SizeType.Absolute, 120));
         outputRow.ColumnStyles.Add(new(SizeType.Percent, 100));
         outputRow.ColumnStyles.Add(new(SizeType.Absolute, 110));
         outputRow.Controls.Add(Caption("Save to"), 0, 0);
@@ -98,21 +128,43 @@ public sealed class MainForm : Form
             if (dialog.ShowDialog(this) == DialogResult.OK) { customOutput = true; output.Text = dialog.SelectedPath; }
         };
         output.TextChanged += (_, _) => { if (!loadingSettings && output.Focused) customOutput = true; };
-        minecraftVersion.TextChanged += (_, _) => { if (!loadingSettings && !customOutput) SetDefaultOutput(); };
+        minecraftVersion.TextChanged += (_, _) =>
+        {
+            if (!loadingSettings) { forgeVersion.Text = ""; PopulateForgeVersions(); if (!customOutput) SetDefaultOutput(); }
+        };
+        forgeVersion.TextChanged += (_, _) => { if (!loadingSettings && !customOutput) SetDefaultOutput(); };
         outputRow.Controls.Add(browse, 2, 0);
         root.Controls.Add(outputRow, 0, 3);
+        var baselineRow = Table(3);
+        baselineRow.ColumnStyles.Add(new(SizeType.Absolute, 120));
+        baselineRow.ColumnStyles.Add(new(SizeType.Percent, 100));
+        baselineRow.ColumnStyles.Add(new(SizeType.Absolute, 110));
+        baselineRow.Controls.Add(Caption("Installed mods"), 0, 0);
+        baselineRow.Controls.Add(installedFolder, 1, 0);
+        var chooseInstalled = MakeButton("Browse...", 100);
+        chooseInstalled.Click += (_, _) =>
+        {
+            using var dialog = new FolderBrowserDialog { Description = "Choose installed mods to compare (read only)", UseDescriptionForTitle = true, SelectedPath = installedFolder.Text };
+            if (dialog.ShowDialog(this) == DialogResult.OK) { installedFolder.Text = dialog.SelectedPath; allowReviewedChanges.Checked = false; }
+        };
+        baselineRow.Controls.Add(chooseInstalled, 2, 0);
+        root.Controls.Add(baselineRow, 0, 4);
+        var policy = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty, AutoScroll = true };
+        policy.Controls.AddRange([dependencies, refresh, allowReviewedChanges]);
+        root.Controls.Add(policy, 0, 5);
 
         var split = new SplitContainer
         {
-            Dock = DockStyle.Fill, Size = new Size(1200, 500), SplitterDistance = 760,
-            Panel1MinSize = 550, Panel2MinSize = 330, SplitterWidth = 12, BackColor = BackColor
+            Dock = DockStyle.Fill, Size = new Size(1280, 500), SplitterDistance = 760,
+            Panel1MinSize = 550, Panel2MinSize = 380, SplitterWidth = 12, BackColor = BackColor
         };
         split.Panel1.Controls.Add(BuildBrowser());
         split.Panel2.Controls.Add(BuildBasket());
-        root.Controls.Add(split, 0, 4);
-        root.Controls.Add(BuildFooter(), 0, 5);
-        lockedDuringDownload.AddRange([serverAddress, serverToken, check, minecraftVersion, channel, dependencies, refresh, output, browse]);
+        root.Controls.Add(split, 0, 6);
+        root.Controls.Add(BuildFooter(), 0, 7);
+        lockedDuringDownload.AddRange([serverAddress, serverToken, check, minecraftVersion, forgeVersion, channel, dependencies, refresh, output, browse, installedFolder, chooseInstalled, allowReviewedChanges]);
         LoadSettings();
+        PopulateForgeVersions();
         if (args.Length == 1 && File.Exists(args[0])) ImportFile(args[0]);
         Shown += async (_, _) => await InitializeBrowserAsync();
         FormClosing += (_, e) =>
@@ -132,12 +184,12 @@ public sealed class MainForm : Form
 
     private static Button MakeButton(string text, int width) => new()
     {
-        Text = text, Width = width, Height = 32, FlatStyle = FlatStyle.System, AutoSize = false,
+        Text = text, Width = width, Height = 32, FlatStyle = FlatStyle.System, AutoSize = false, Anchor = AnchorStyles.Left | AnchorStyles.Right,
         Margin = new Padding(3)
     };
     private static Label Caption(string text) => new()
     {
-        Text = text, AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(3, 8, 6, 0)
+        Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(3, 0, 6, 0), AutoEllipsis = true
     };
     private static TableLayoutPanel Table(int columns) => new() { Dock = DockStyle.Fill, ColumnCount = columns, RowCount = 1, Margin = Padding.Empty };
 
@@ -153,6 +205,7 @@ public sealed class MainForm : Form
     private Control BuildBrowser()
     {
         var panel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.White, Padding = new Padding(8) };
+        panel.ColumnStyles.Add(new(SizeType.Percent, 100));
         panel.RowStyles.Add(new(SizeType.Absolute, 40));
         panel.RowStyles.Add(new(SizeType.Absolute, 38));
         panel.RowStyles.Add(new(SizeType.Percent, 100));
@@ -189,6 +242,7 @@ public sealed class MainForm : Form
     private Control BuildBasket()
     {
         var panel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, BackColor = Color.White, Padding = new Padding(10) };
+        panel.ColumnStyles.Add(new(SizeType.Percent, 100));
         panel.RowStyles.Add(new(SizeType.Absolute, 34));
         panel.RowStyles.Add(new(SizeType.Absolute, 42));
         panel.RowStyles.Add(new(SizeType.Absolute, 42));
@@ -229,12 +283,59 @@ public sealed class MainForm : Form
         clear.Click += (_, _) => { basket.Items.Clear(); UpdateCount(); };
         edit.Controls.AddRange([remove, clear]);
         panel.Controls.Add(edit, 0, 4);
-        return panel;
+        var selectedTab = new TabPage("Selected mods") { Padding = new Padding(3) };
+        selectedTab.Controls.Add(panel);
+        reportGrid.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+        reportGrid.SizeChanged += (_, _) => reportGrid.AutoResizeRows();
+        reportGrid.ColumnWidthChanged += (_, _) => reportGrid.AutoResizeRows();
+        reportGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Severity", HeaderText = "Type", FillWeight = 18, MinimumWidth = 65 });
+        reportGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Project", HeaderText = "Mod / project", FillWeight = 28, MinimumWidth = 85 });
+        reportGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Detail", HeaderText = "Details", FillWeight = 54, MinimumWidth = 120 });
+        var reportDetails = new TextBox
+        {
+            Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+            WordWrap = true, BackColor = Color.White, BorderStyle = BorderStyle.None
+        };
+        reportGrid.SelectionChanged += (_, _) =>
+        {
+            var row = reportGrid.CurrentRow;
+            reportDetails.Text = row == null ? "" : string.Join(Environment.NewLine,
+                row.Cells.Cast<DataGridViewCell>().Select(cell => Convert.ToString(cell.Value) ?? ""))
+                .Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+        };
+        var detailGroup = new GroupBox { Text = "Selected report item", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        detailGroup.Controls.Add(reportDetails);
+        var reportLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+        reportLayout.ColumnStyles.Add(new(SizeType.Percent, 100));
+        reportLayout.RowStyles.Add(new(SizeType.Percent, 65));
+        reportLayout.RowStyles.Add(new(SizeType.Percent, 35));
+        reportLayout.Controls.Add(reportGrid, 0, 0);
+        reportLayout.Controls.Add(detailGroup, 0, 1);
+        reportTab.Controls.Add(reportLayout);
+        basketTabs.TabPages.AddRange([selectedTab, reportTab]);
+        return basketTabs;
+    }
+
+    private void ShowReport(JobSnapshot job)
+    {
+        reportGrid.Rows.Clear();
+        foreach (var error in job.Errors) reportGrid.Rows.Add("Error", error.Project, error.Error);
+        foreach (var warning in job.Warnings) reportGrid.Rows.Add("Warning", warning.Project, warning.Error);
+        foreach (var change in job.Compatibility?.Changes ?? [])
+            reportGrid.Rows.Add(change.Kind, string.IsNullOrEmpty(change.ModId) ? change.Previous : change.ModId, string.Join(Environment.NewLine, $"{change.OldVersion} → {change.NewVersion}", change.Previous, change.Current));
+        foreach (var file in job.Files.Where(x => x.Verified != null))
+        {
+            var versions = string.Join(", ", file.Metadata?.Mods.Where(x => !x.Bundled).Select(x => $"{x.Id} {x.Version}") ?? []);
+            var reason = file.Requested ? "Requested" : $"Required by: {string.Join(", ", file.RequiredBy)}";
+            reportGrid.Rows.Add("Selected", file.Slug, string.Join(Environment.NewLine, versions, file.Filename, reason));
+        }
+        if (job.Errors.Length > 0 || job.Compatibility?.RequiresReview == true) basketTabs.SelectedTab = reportTab;
     }
 
     private Control BuildFooter()
     {
         var panel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(0, 8, 0, 0) };
+        panel.ColumnStyles.Add(new(SizeType.Percent, 100));
         panel.RowStyles.Add(new(SizeType.Absolute, 40));
         panel.RowStyles.Add(new(SizeType.Absolute, 16));
         panel.RowStyles.Add(new(SizeType.Percent, 100));
@@ -317,6 +418,30 @@ public sealed class MainForm : Form
             using var bitmap = new Bitmap(Width, Height);
             DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size));
             bitmap.Save(Path.Combine(smokeDirectory, "client.png"));
+            ShowReport(new JobSnapshot
+            {
+                Errors = [new JobIssue("compatibility-example", "A required mod version does not match the selected candidate. Pin a compatible file and retry.")],
+                Warnings = [new JobIssue("baseline-example", "An installed mod is missing from this selection. Review replacements before continuing.")],
+                Compatibility = new CompatibilityReport
+                {
+                    State = "review_required", RequiresReview = true,
+                    Changes = [new ModChange("downgrade", "example_library", "previous-example-library-1.2.43.jar", "candidate-example-library-0.0.47-snapshot.jar", "1.2.43", "0.0.47-snapshot")]
+                }
+            });
+            using (var reportImage = new Bitmap(Width, Height))
+            {
+                DrawToBitmap(reportImage, new Rectangle(Point.Empty, Size));
+                reportImage.Save(Path.Combine(smokeDirectory, "report.png"));
+            }
+            Size = MinimumSize;
+            PerformLayout();
+            await Task.Delay(150);
+            reportGrid.AutoResizeRows();
+            using (var minimumImage = new Bitmap(Width, Height))
+            {
+                DrawToBitmap(minimumImage, new Rectangle(Point.Empty, Size));
+                minimumImage.Save(Path.Combine(smokeDirectory, "minimum.png"));
+            }
             if (ready)
             {
                 await using var capture = File.Create(Path.Combine(smokeDirectory, "webview.png"));
@@ -340,14 +465,21 @@ public sealed class MainForm : Form
 
     private bool AddUrl(string raw)
     {
+        if (busy) { WriteLog("Cancel the current download before changing the mod list."); return false; }
         try
         {
             var url = ProjectUrls.Normalize(raw);
-            if (basket.Items.Cast<ProjectItem>().Any(x => x.Url == url)) { status.Text = "This mod is already in the list."; return true; }
+            var existing = basket.Items.Cast<ProjectItem>().FirstOrDefault(x => ProjectUrls.ProjectKey(x.Url) == ProjectUrls.ProjectKey(url));
+            if (existing != null)
+            {
+                if (existing.Url == url || !url.Contains("/files/")) { status.Text = "This mod is already in the list."; return true; }
+                basket.Items.Remove(existing);
+            }
             if (basket.Items.Count >= 500) throw new FormatException("You can add up to 500 projects at a time.");
             basket.Items.Add(new ProjectItem(url));
+            allowReviewedChanges.Checked = false;
             UpdateCount();
-            status.Text = $"Added to the list: {url.Split('/')[^1]}";
+            status.Text = $"Added to the list: {ProjectUrls.ProjectKey(url)}";
             return true;
         }
         catch (FormatException error) { WriteLog(error.Message); return false; }
@@ -367,6 +499,13 @@ public sealed class MainForm : Form
     }
 
     private void UpdateCount() => basketCount.Text = $"Selected mods · {basket.Items.Count}";
+    private void PopulateForgeVersions()
+    {
+        var selected = forgeVersion.Text;
+        forgeVersion.Items.Clear();
+        forgeVersion.Items.AddRange(ForgeVersions.InstalledFor(minecraftVersion.Text.Trim()));
+        forgeVersion.Text = selected;
+    }
     private void WriteLog(string message)
     {
         status.Text = message;
@@ -391,13 +530,16 @@ public sealed class MainForm : Form
     {
         if (busy) return;
         if (basket.Items.Count == 0) { WriteLog("Add mods to the list first."); return; }
+        if (string.IsNullOrWhiteSpace(forgeVersion.Text)) { WriteLog("Select or enter your installed Forge version before downloading."); forgeVersion.Focus(); return; }
         using var cancellation = new CancellationTokenSource();
         operation = cancellation;
         busy = true;
+        basketTabs.TabPages[0].Enabled = false;
         download.Enabled = false;
         cancel.Enabled = true;
         foreach (var control in lockedDuringDownload) control.Enabled = false;
         progress.Value = 0;
+        reportGrid.Rows.Clear();
         ServerClient? api = null;
         string? jobId = null;
         var terminal = false;
@@ -406,8 +548,17 @@ public sealed class MainForm : Form
             var directory = Path.GetFullPath(output.Text);
             if (directory == Path.GetPathRoot(directory)) throw new IOException("Choose a dedicated download folder.");
             api = new ServerClient(serverAddress.Text, serverToken.Text);
-            var request = new JobRequest(basket.Items.Cast<ProjectItem>().Select(x => x.Url).ToArray(),
-                minecraftVersion.Text.Trim(), channel.Text, dependencies.Checked, refresh.Checked);
+            var projectUrls = basket.Items.Cast<ProjectItem>().Select(x => x.Url).ToArray();
+            var baselinePath = installedFolder.Text.Trim();
+            if (baselinePath == "" && Directory.Exists(directory) && Directory.GetFiles(directory, "*.jar").Length > 0) baselinePath = directory;
+            progress.Style = ProgressBarStyle.Marquee;
+            var baseline = await BaselineReader.ReadAsync(baselinePath, new Progress<string>(message => status.Text = message), cancellation.Token);
+            var request = new JobRequest(projectUrls,
+                minecraftVersion.Text.Trim(), channel.Text, dependencies.Checked, refresh.Checked)
+            {
+                ForgeVersion = forgeVersion.Text.Trim(), InstalledFiles = baseline,
+                AllowReviewedChanges = allowReviewedChanges.Checked
+            };
             SaveSettings();
             WriteLog("Mod list sent to the server.");
             var job = await api.CreateJobAsync(request, cancellation.Token);
@@ -419,8 +570,18 @@ public sealed class MainForm : Form
             {
                 terminal = job.IsTerminal;
                 if (job.State == "cancelled") throw new OperationCanceledException("The server job was canceled.");
-                // Receive each ready file while the server fills other cache
-                // entries. A cache hit need not wait for the entire batch.
+                if (terminal)
+                {
+                    progress.Style = ProgressBarStyle.Continuous;
+                    ShowReport(job);
+                    if (job.State == "completed" && Directory.Exists(directory))
+                    {
+                        var filenames = job.Files.Select(x => x.Filename).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        var unselected = Directory.GetFiles(directory, "*.jar").Where(x => !filenames.Contains(Path.GetFileName(x))).ToArray();
+                        if (unselected.Length > 0) throw new IOException("The output folder contains JARs outside the validated selection. Choose an empty output folder to prevent duplicate or obsolete mods.");
+                    }
+                }
+                // Ready paths are released only after the whole batch passes validation.
                 var ready = job.Files.Where(x => x.Verified != null && x.DownloadPath != "" &&
                     x.Status is "cached" or "downloaded").OrderByDescending(x => x.Status == "cached");
                 foreach (var file in ready)
@@ -448,20 +609,22 @@ public sealed class MainForm : Form
                     }
                 }
                 if (terminal) break;
-                status.Text = job.State is "queued" or "resolving" ? "The server is checking compatible files and dependencies." :
-                    $"Server cache: {job.Completed}/{job.Total} ready · {localFiles.Count} received · {job.CacheHits} cache hits";
+                status.Text = job.Detail != "" ? job.Detail : job.State is "queued" or "resolving" ? "Finding the highest compatible mod versions. The first scan may take longer." :
+                    $"Validating requirements: {job.Completed}/{job.Total} · {job.CacheHits} cache hits";
+                progress.Style = job.Total == 0 ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous;
                 progress.Value = job.Total == 0 ? 0 : Math.Clamp((job.Completed + localFiles.Count) * 500 / job.Total, 0, 1000);
                 await Task.Delay(600, cancellation.Token);
                 job = await api.GetJobAsync(job.Id, cancellation.Token);
             }
             issues.AddRange(job.Errors);
             foreach (var issue in job.Errors) WriteLog($"{issue.Project}: {issue.Error}");
-            // Preserve failed server selections in the local manifest as well.
-            localFiles.AddRange(job.Files.Where(x => x.Status == "failed"));
+            foreach (var warning in job.Warnings) WriteLog($"Warning · {warning.Project}: {warning.Error}");
+            localFiles.AddRange(job.Files.Where(x => !transferred.Contains(x.DownloadPath)).Select(x =>
+                x.Status == "failed" ? x : x with { Status = "blocked", Verified = null, Error = "Batch compatibility checks did not pass." }));
             await ServerClient.WriteManifestAsync(directory, job, localFiles.ToArray(), issues.ToArray(), cancellation.Token);
             progress.Value = 1000;
-            WriteLog(issues.Count == 0 ? $"Complete: {localFiles.Count} JAR files verified and saved." :
-                $"{issues.Count} item(s) failed. Check manifest.json in the output folder and the log.");
+            WriteLog(issues.Count == 0 ? $"Complete: {localFiles.Count} JAR files saved · {job.Warnings.Length} warning(s). See Validation report." :
+                $"{issues.Count} issue(s). No incompatible batch was released. See Validation report and the failed-job report.");
         }
         catch (OperationCanceledException)
         {
@@ -478,15 +641,18 @@ public sealed class MainForm : Form
             api?.Dispose();
             operation = null;
             busy = false;
+            basketTabs.TabPages[0].Enabled = true;
             download.Enabled = true;
             cancel.Enabled = false;
+            allowReviewedChanges.Checked = false;
+            progress.Style = ProgressBarStyle.Continuous;
             foreach (var control in lockedDuringDownload) control.Enabled = true;
         }
     }
 
     private void SetDefaultOutput() => output.Text = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "cfmodsync", "downloads",
-        minecraftVersion.Text.Trim() + "-forge");
+        minecraftVersion.Text.Trim() + "-forge" + (forgeVersion.Text.Trim() == "" ? "" : "-" + forgeVersion.Text.Trim()));
 
     private void LoadSettings()
     {
@@ -499,7 +665,14 @@ public sealed class MainForm : Form
             if (settings == null) return;
             serverAddress.Text = settings.ServerAddress;
             minecraftVersion.Text = settings.MinecraftVersion;
-            channel.SelectedItem = settings.Channel is "all" or "beta" or "release" ? settings.Channel : "all";
+            forgeVersion.Text = settings.ForgeVersion;
+            installedFolder.Text = settings.InstalledFolder;
+            channel.SelectedItem = settings.Channel is "all" or "beta" or "release" ? settings.Channel : "release";
+            if (settings.SelectionPolicyVersion < 2 && settings.Channel == "all")
+            {
+                channel.SelectedItem = "release";
+                WriteLog("Release-only is now the default. Select beta or all explicitly if needed.");
+            }
             dependencies.Checked = settings.Dependencies;
             customOutput = settings.CustomOutput;
             if (customOutput) output.Text = settings.Output;
@@ -517,7 +690,8 @@ public sealed class MainForm : Form
         {
             Directory.CreateDirectory(AppDirectory);
             var settings = new ClientSettings(serverAddress.Text, minecraftVersion.Text, channel.Text,
-                dependencies.Checked, output.Text, customOutput, basket.Items.Cast<ProjectItem>().Select(x => x.Url).ToArray());
+                dependencies.Checked, output.Text, customOutput, basket.Items.Cast<ProjectItem>().Select(x => x.Url).ToArray())
+            { ForgeVersion = forgeVersion.Text, InstalledFolder = installedFolder.Text, SelectionPolicyVersion = 2 };
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, Protocol.Json));
         }
         catch (Exception error) { WriteLog("Could not save settings: " + error.Message); }
@@ -525,8 +699,13 @@ public sealed class MainForm : Form
 
     private sealed record ProjectItem(string Url)
     {
-        public override string ToString() => Url.Split('/')[^1];
+        public override string ToString() => ProjectUrls.ProjectKey(Url) + (Url.Contains("/files/") ? $" · pinned {Url.Split('/')[^1]}" : "");
     }
     private sealed record ClientSettings(string ServerAddress, string MinecraftVersion, string Channel,
-        bool Dependencies, string Output, bool CustomOutput, string[] ProjectUrls);
+        bool Dependencies, string Output, bool CustomOutput, string[] ProjectUrls)
+    {
+        public string ForgeVersion { get; init; } = "";
+        public string InstalledFolder { get; init; } = "";
+        public int SelectionPolicyVersion { get; init; }
+    }
 }

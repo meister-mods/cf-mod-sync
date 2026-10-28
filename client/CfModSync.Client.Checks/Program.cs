@@ -19,11 +19,22 @@ var parsed = ProjectUrls.ParseList([
     "https://curseforge.com/minecraft/mc-mods/create/files/all?gameVersion=1.20.1",
     "https://www.curseforge.com/minecraft/mc-mods/jei"]);
 Require(parsed.Length == 2, "import must canonicalize and deduplicate URLs");
+var pinned = ProjectUrls.ParseList(["https://www.curseforge.com/minecraft/mc-mods/demo", "https://www.curseforge.com/minecraft/mc-mods/demo/files/123"]);
+Require(pinned.Length == 1 && pinned[0].EndsWith("/files/123"), "import must preserve exact file pins");
+await MustFail(() => Task.Run(() => ProjectUrls.ParseList(["https://www.curseforge.com/minecraft/mc-mods/demo/files/123", "https://www.curseforge.com/minecraft/mc-mods/demo/files/456"])), "accepted conflicting file pins");
 await MustFail(() => Task.Run(() => ProjectUrls.Normalize("https://evil.example/minecraft/mc-mods/create")), "accepted foreign URL");
 await MustFail(() => Task.Run(() => ProjectUrls.Normalize("http://www.curseforge.com/minecraft/mc-mods/create")), "accepted HTTP project URL");
 await MustFail(() => Task.Run(() => new ServerClient("http://192.0.2.1:8080", "token").Dispose()), "accepted insecure remote server");
 foreach (var bad in new[] { "../escape.jar", "CON.jar", "lpt1.jar", ".hidden.jar", "dir\\escape.jar" })
     Require(!ServerClient.SafeFilename(bad), "unsafe filename: " + bad);
+
+if (args.Length == 2 && args[0] == "--baseline")
+{
+    var files = await BaselineReader.ReadAsync(args[1], null, CancellationToken.None);
+    Require(files.Length > 0 && files.All(file => file.Sha256.Length == 64), "baseline metadata or hashes are missing");
+    Console.WriteLine($"PASS: read {files.Length} installed JARs with SHA-256 and bounded manifest metadata.");
+    return;
+}
 
 if (args.Length != 0)
 {
@@ -55,6 +66,12 @@ if (args.Length != 0)
         Require(manifest.RootElement.GetProperty("schema_version").GetInt32() == 1, "wrong manifest schema");
         Require(manifest.RootElement.GetProperty("entries").GetArrayLength() == 2, "manifest entries missing");
     }
+    var goodManifest = await File.ReadAllBytesAsync(Path.Combine(output, "manifest.json"), ct);
+    var failedId = new string('a', 32);
+    await ServerClient.WriteManifestAsync(output, job with { Id = failedId, State = "failed" }, [], [new JobIssue("test", "expected failure")], ct);
+    var preservedManifest = await File.ReadAllBytesAsync(Path.Combine(output, "manifest.json"), ct);
+    Require(goodManifest.SequenceEqual(preservedManifest), "failed job overwrote successful manifest");
+    Require(File.Exists(Path.Combine(output, $"failed-job-{failedId}.json")), "failed job report was not retained");
     var original = job.Files[0];
     var path = Path.Combine(output, original.Filename);
     var before = SHA256.HashData(await File.ReadAllBytesAsync(path, ct));

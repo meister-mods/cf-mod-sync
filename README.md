@@ -1,208 +1,170 @@
-# cfmodsync — Cache Server and Windows Client
+# cfmodsync — Forge-aware Mod Cache Server and Windows Client
 
 [Korean README](README.kr.md)
 
-The project includes a **Go cache server** and a **C# WinForms client with an embedded CurseForge WebView2 browser**. The server owns the CurseForge API key. Clients submit project URLs and receive verified JARs from the server.
+A Go server keeps the CurseForge API key and verified JAR cache. The English Windows client uses WinForms and WebView2 to import mod lists, collect CurseForge links, select an installed Forge version, and review compatibility before downloading.
 
-```mermaid
-flowchart LR
-    List[".mods file / selected website links"] --> Client["Windows client"]
-    Client -->|"Project URLs + Minecraft version"| Server["Go API server"]
-    Server -->|"API key · cache miss"| CurseForge["CurseForge API / CDN"]
-    CurseForge -->|"Validate JAR"| Cache["Persistent server cache"]
-    Cache -->|"Ready files, including cache hits"| Client
-    Client -->|"SHA-256 validation"| Output["Local JARs + manifest.json"]
+## Repository layout
+
+```text
+server/                         Go server, CLI, compatibility engine, tests, go.mod
+  .env.example                  Server configuration template
+client/
+  .mods.example                 Example project list
+  CfModSync.Client/             Windows client
+  CfModSync.Client.Checks/      Client/protocol checks
+scripts/                        Build and launch scripts
+artifacts/                      Generated binaries and Windows ZIP
 ```
 
-## Server and client quick start
+Local `server/.env`, `client/.mods`, server caches and downloads are excluded from Git. The build packages a fresh staging directory, so an existing deployment's keys, private lists, and cache are not copied into the ZIP.
 
-Server requirements: Go 1.27.3+ when building from source, or the compiled server executable. Client build requirements: Windows and the .NET 10 SDK. Running the client requires the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) and [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+## Quick start
 
-1. On the **server**, create `.env` and set `CURSEFORGE_API_KEY`:
+Build requirements: the Go version in `server/go.mod` and the .NET 10 SDK on Windows. Client runtime requirements: [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) and [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
-   ```powershell
-   Copy-Item .env.example .env
-   notepad .env
-   go run . serve
-   ```
+From the repository root:
 
-   The default address is `http://127.0.0.1:8080` and the cache directory is `cache/`. The server does not need a local `.mods` file; project lists come from clients.
+```powershell
+if (!(Test-Path server/.env)) { Copy-Item server/.env.example server/.env }
+notepad server/.env
+# Set CURSEFORGE_API_KEY to your approved key.
+go -C server run . serve
+```
 
-2. Build both components from the repository root:
+In another terminal:
 
-   ```powershell
-   .\scripts\build.ps1
-   .\artifacts\client\CfModSync.Client.exe
-   ```
+```powershell
+.\scripts\build.ps1
+.\artifacts\client\CfModSync.Client.exe
+```
 
-   The script builds and tests both components, runs a real C# client against a Go server backed by a mock CurseForge service, and creates `artifacts/cfmodsync-windows.zip`. `-Race` additionally enables Go's race detector when a supported C compiler is installed.
+The ZIP is `artifacts/cfmodsync-windows.zip`. For a deployment, configure `server/.env` beside the server binary and run `Start-Server.ps1`. Distribute the entire `client/` directory to Windows users.
 
-3. In the client, enter the server address and optional **server access token**, then click **Connect**. Select the Minecraft version, release channel, dependencies, and output directory.
-4. Use **Import list** to import `.mods` or `.mods.example`, paste a project URL, or browse CurseForge. With **Add mod links when clicked** enabled, clicking a mod project link adds it to the basket. Disable this option to browse project pages, then use **Add current project** to add the current project.
-5. Click **Download selected mods**. Ready files are transferred while the server fills other cache entries. Existing local files are reused only after SHA-256 validation. The client writes `manifest.json` in the output directory.
+## Using the client
 
-The basket and connection settings are saved in `%LOCALAPPDATA%\cfmodsync\settings.json`. The access token is kept only for the current session. WebView2 data is stored beside the settings. You can also open a list directly with `CfModSync.Client.exe "C:\path\.mods"`.
+1. Enter **Server** and, if configured, **Access token**. Click **Connect**.
+2. Choose **Minecraft** and **Forge version**. The editable Forge list detects installations in the standard Minecraft versions directory; you can also type a version. Enter the exact build, for example `47.4.28`. The client requires a Forge version before downloading; API/CLI calls without one report unchecked loader requirements.
+3. Choose **Release policy**. The default is `release`. Import `.mods` with **Import list**, paste URLs, or select links in the browser. **Add mod links when clicked** collects project/file links; turn it off to browse project pages.
+4. Optionally select **Installed mods**: an actual folder containing old JARs. The client sends their metadata and SHA-256 values, not the JARs or filesystem paths. A PowerShell directory listing cannot provide internal dependency information.
+5. Choose a clean **Save to** directory and click **Download selected mods**. The server resolves and validates the whole combination before releasing download paths.
+6. Inspect **Validation report** for missing projects, version conflicts, CF dependency provenance, prereleases, removals, downgrades and filename-family replacements. **Allow reviewed replacements** acknowledges baseline changes for one request; it never bypasses hard dependency or Forge errors.
 
-### Server deployment and authentication
+The selected list is sorted by project name. Progress, logs, and validation details have separate areas. The UI supports per-monitor DPI scaling and an adjustable browser/list split.
 
-The distribution contains separate `server/` and `client/` directories. On the server machine, copy `server/.env.example` to `server/.env`, configure the key, and run `Start-Server.ps1` or `cfmodsync.exe serve` from that directory. Distribute the entire `client/` directory to Windows users. Never distribute the server's `.env`.
+The client reuses identical local files after SHA-256 validation. It refuses an output folder containing unselected JARs, which would leave obsolete or duplicate mods. Failed runs write `failed-job-<id>.json` and preserve the previous successful `manifest.json`. Settings are saved in `%LOCALAPPDATA%\cfmodsync\settings.json`; access tokens are not persisted.
 
-| Server option | Default | Purpose |
-| --- | --- | --- |
-| `-listen` / `SERVER_LISTEN` | `127.0.0.1:8080` | Listen address |
-| `-cache` / `SERVER_CACHE_DIR` | `cache` | Persistent cache root |
-| `-token` / `SERVER_TOKEN` | Empty on loopback | Client bearer token, separate from the CurseForge key |
-| `-workers` | `4` | Global upstream download concurrency, 1–16 |
-| `-max-file-mb` | `1024` | Maximum JAR size in MiB |
-| `-metadata-ttl` | `15m` | How long to reuse latest-file selections |
-| `-job-ttl` | `1h` | Completed job retention in memory |
-| `-tls-cert` / `-tls-key` | Empty | Optional HTTPS certificate and private key PEM files |
+## Version selection and validation
 
-Listening outside loopback requires a `SERVER_TOKEN` of at least 32 characters. Set it in the server environment or `.env`. Use HTTPS for remote clients, either with `-tls-cert` and `-tls-key` or an HTTPS reverse proxy; the desktop client accepts plain HTTP only for loopback addresses. The client sends the token in the `Authorization: Bearer ...` header. The API rejects browser-origin requests and does not expose the CurseForge key or upstream download URLs.
+- The API identifies exact CurseForge projects and filters Minecraft version and Forge loader. Every requested project is accounted for, including failed projects.
+- Candidate JARs are cached and checked for HTTPS delivery, safe filenames, expected size, API SHA-1/MD5, and ZIP/CRC integrity.
+- The server reads `META-INF/mods.toml`, the main manifest section, and declared JarJar artifacts. It checks Minecraft, the selected Forge build, required mods, installed optional dependency ranges, and shared library ranges. It handles manifest version substitution, wildcards and Maven soft recommendations. Built-in FML loader requirements use the Forge major version; custom language loaders produce an explicit unchecked warning.
+- Within a common mod identity, candidates are ranked by their declared mod version using Maven-style comparison. Publication date and file ID break ties. Backtracking searches for a compatible combination, giving requested projects priority in list order.
+- A project with changing/unidentified mod identities cannot be reliably ordered by mod version. It gets an explicit warning and publication-date fallback; use file pins for content families.
+- `release` excludes API beta/alpha files and recognized declared prereleases. `beta` permits API release/beta files but rejects declared alpha builds. `all` also includes API alpha files. A specific file pin overrides release policy while still enforcing availability, integrity and runtime requirements.
+- Baselines detect missing mod IDs, downgrades, renamed filename families, changed bytes for an unchanged version, and unidentified missing content packs. Review is required before releasing such a batch.
+- The default limit is 200 eligible candidates per project; exceeding it fails explicitly. Raise `-candidate-limit` up to 1000 or pin a file. The compatibility search is bounded to 500 projects and 10000 search steps.
 
-### Cache behavior and API
+The first exact-version scan can download multiple candidate versions. Subsequent requests reuse the persistent cache. Cache eviction is manual. These checks validate declared metadata; Java/runtime features, mixins, content removed within a pack, and actual world/game loading still require a Minecraft test.
 
-- JARs and their verification metadata live in `cache/files/<mod-id>/<file-id>/`. Latest-file selections live in `cache/selections/`. Both survive server restarts.
-- An unexpired selection cache and valid JARs need no upstream API or CDN requests. A client can force a metadata refresh with **Refresh latest files**. After the metadata TTL expires, the server checks CurseForge for newer compatible files.
-- Concurrent requests for the same file share one upstream download. Cancelling one job does not cancel a shared cache fill needed by another client.
-- Cache fills use temporary files, API SHA-1/MD5 checksums, and ZIP/CRC validation. Cached files are revalidated before delivery; damaged cache entries are repaired on the next job.
-- Jobs support progress, per-file errors, and cancellation. The server allows eight active jobs and retains at most 128 jobs; completed records expire after `-job-ttl` when new jobs arrive. Job IDs do not survive restarts; resubmit the list to reuse persistent files.
-- This version does not automatically evict old server cache files or remove older JARs from client output folders. Monitor available disk space and keep Minecraft versions in separate output directories. It supports Minecraft **Forge**.
+Forge references: [mod metadata and dependencies](https://docs.minecraftforge.net/en/1.20.x/gettingstarted/modfiles/), [versioning](https://docs.minecraftforge.net/en/1.20.1/gettingstarted/versioning/), [Jar-in-Jar negotiation](https://docs.minecraftforge.net/en/fg-6.x/dependencies/jarinjar/).
 
-| Method | Route | Purpose |
-| --- | --- | --- |
-| `GET` | `/healthz` | Public health check |
-| `GET` | `/api/v1/status` | Authenticated protocol/connection check |
-| `POST` | `/api/v1/jobs` | Create a job; returns `202` and a job ID |
-| `GET` | `/api/v1/jobs/{id}` | Poll progress and ready-file download paths |
-| `DELETE` | `/api/v1/jobs/{id}` | Cancel a job |
-| `GET` | `/api/v1/files/{modId}/{fileId}` | Receive a validated cached JAR; supports HTTP Range |
+## Project lists and file pins
 
-Example job body (project URLs must be canonical project URLs):
+```text
+# Latest compatible version:
+https://www.curseforge.com/minecraft/mc-mods/jei
+
+# Exact file pin, for example the previously used Kaminari file:
+https://www.curseforge.com/minecraft/mc-mods/kaminari-motor-works/files/6549423
+```
+
+Blank lines and `#` comments are ignored. Conflicting pins for one project are rejected. Required CurseForge dependencies are included by default; `required_by` records why a project was added. If those relations omit a mandatory JAR dependency, the server tries an exact project slug derived from its mod ID and verifies the downloaded provider's actual mod ID. Unresolved dependencies still fail validation; add their project URLs explicitly. Other relationship types are not added. If dependency auto-addition is disabled, provide the complete list yourself; JAR dependency checks still apply.
+
+## Standalone CLI and offline audit
+
+Run from the repository root. Relative runtime paths are resolved from `server/` because of `go -C server`.
+
+```powershell
+if (!(Test-Path client/.mods)) { Copy-Item client/.mods.example client/.mods }
+go -C server run . -forge-version 47.4.28 -channel release
+go -C server run . -forge-version 47.4.28 -baseline "C:\mods-before" -output downloads/new-profile
+go -C server run . -dry-run
+go -C server run . -verify-only
+go -C server run . audit -mods "C:\mods-after" -baseline "C:\mods-before" -forge-version 47.4.28 -report reports/audit.json
+```
+
+The offline audit reads existing JARs without API access and records local SHA-256 and ZIP/CRC results. Without an API checksum it does not authenticate their source. Directory listings alone support filename/size comparisons, not internal dependency checks.
+
+| CLI option | Purpose |
+| --- | --- |
+| `-version` | Minecraft version, default `1.20.1` |
+| `-forge-version` | Exact installed Forge version; defaults to `FORGE_VERSION` |
+| `-channel` | `release`, `beta`, or `all`; environment `RELEASE_CHANNEL` can override the default |
+| `-input` | Project list, default `../client/.mods` |
+| `-output` | Selected JAR output, default `downloads/<MC>-forge` |
+| `-baseline` | Previous JAR directory for review |
+| `-allow-reviewed-changes` | Explicitly acknowledge baseline changes |
+| `-candidate-limit` | Per-project candidate safety limit |
+| `-deps=false` | Disable CF dependency auto-addition |
+| `-workers` | Concurrent candidate downloads, 1–16 |
+| `-max-file-mb` | Maximum JAR size in MiB, default 1024 |
+| `-force` | Safely redownload and replace same-named selected files |
+| `-prune` | After success, remove verified obsolete files managed by the previous manifest |
+| `-dry-run` | API-only plan; actual JAR/Forge compatibility is `not_checked` |
+| `-verify-only` | Offline integrity and declared dependency recheck |
+
+CLI candidates live in `<output>/.candidate-cache/`; only selected files are installed at the output root. A failed CLI run writes `failed-run-*.json` instead of replacing the successful manifest. Pruning never deletes unmanaged or changed files.
+
+## Server options and API
+
+| Server option / environment | Default |
+| --- | --- |
+| `-listen` / `SERVER_LISTEN` | `127.0.0.1:8080` |
+| `-cache` / `SERVER_CACHE_DIR` | `cache` |
+| `-token` / `SERVER_TOKEN` | Empty for loopback |
+| `-workers` | `4` |
+| `-candidate-limit` | `200` |
+| `-metadata-ttl` | `15m` |
+| `-job-ttl` | `1h` |
+| `-max-file-mb` | `1024` |
+| `-tls-cert` / `-tls-key` | Optional certificate/key PEM files |
+
+Remote listening requires a bearer token of at least 32 characters. Remote clients require HTTPS, either directly or through a reverse proxy. HTTP is accepted by the desktop client only on loopback. The CurseForge key stays on the server, and upstream URLs are not exposed. Use one server process per cache directory.
+
+The cache uses `cache/files/<mod-id>/<file-id>/` and `cache/selections/`. File fills are shared across simultaneous requests; canceling one waiter does not cancel a shared fill. Completed jobs are kept in memory for `-job-ttl`, with eight active jobs and up to 128 retained records. Files/selections survive restarts; job IDs do not.
+
+| Method | Route |
+| --- | --- |
+| `GET` | `/healthz` — public health |
+| `GET` | `/api/v1/status` — authenticated connection check |
+| `POST` | `/api/v1/jobs` — create an asynchronous job |
+| `GET` | `/api/v1/jobs/{id}` — progress and validation report |
+| `DELETE` | `/api/v1/jobs/{id}` — cancel |
+| `GET` | `/api/v1/files/{modId}/{fileId}` — verified JAR, HTTP Range supported |
 
 ```json
 {
   "project_urls": ["https://www.curseforge.com/minecraft/mc-mods/jei"],
   "minecraft_version": "1.20.1",
+  "forge_version": "47.4.28",
   "release_channel": "release",
   "include_dependencies": true,
-  "refresh": false
+  "refresh": false,
+  "allow_reviewed_changes": false
 }
 ```
 
-Job states are `queued`, `resolving`, `caching`, `completed`, `failed`, and `cancelled`. Each ready file includes a relative `download_path` and `verified.sha256` / `verified.size_bytes`. A job may fail for some projects while still providing ready files for others. API distribution restrictions are checked before selecting files; a locally cached selection remains valid until its metadata TTL expires.
+Optional `installed_files` contains `filename`, `sha256`, `mods_toml` and main-section `manifest` strings. Requests are limited to 8 MiB and 500 projects/baseline files. States are `queued`, `resolving`, `validating`, `completed`, `failed` and `cancelled`. Progress details describe candidate inspection. Failed or unreviewed batches have no download paths.
 
-## Standalone CLI
+## API access and development
 
-Add one CurseForge Minecraft **mod project URL** per line to `.mods`. The tool searches each project and downloads the most recently listed JAR that matches the **Minecraft version and Forge loader**.
-
-- Default target: **Minecraft 1.20.1 / Forge**. Change it with `MC_VERSION` in `.env` or the `-version` flag.
-- Uses the official [CurseForge Core API](https://docs.curseforge.com/rest-api/). It does not scrape web pages, guess `/download/latest` redirects, or hardcode URLs or file IDs.
-- Filters API results by `gameVersion` and `modLoaderType=1`, then checks the returned version and loader metadata. Files are ranked by **listing date (`FileDate`)**; this does not guarantee that a mod will run successfully.
-- Recursively adds required dependencies (CurseForge `relationType=3`) by default. Other relationships are not added automatically.
-- Validates downloads using HTTPS, safe filenames, file size, CurseForge-provided **SHA-1/MD5** checksums, and JAR/ZIP entry CRC and decompression checks. Records a local SHA-256 hash in the manifest.
-- Rejects files without a provided checksum by default because their integrity **cannot be verified**. Passing the hash and ZIP checks is not a malware scan or proof that Minecraft will start.
-- Revalidates and reuses an already downloaded identical file as `cached`. It does not overwrite a damaged existing file automatically; use `-force` to download it again.
-- Writes `manifest.json`; supports `-dry-run` to inspect the plan, `-verify-only` to recheck files offline, and `-prune` to remove obsolete versions managed by a previous run.
-
-## 1. API key required
-
-**Since July 16, 2026, direct downloads from the CurseForge CDN require an API key.** The CurseForge REST API also requires `x-api-key` authentication for searches. Official policy and guidance:
-
-- [CurseForge: CDN API key authentication](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/)
-- [How to apply for an API key](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
-- [API documentation](https://docs.curseforge.com/rest-api/)
-
-You must obtain your own approved API key. This project does not provide someone else's key or use an unofficial bypass API. If a project owner disables **third-party distribution**, the API may not provide the file; this tool does not bypass that setting.
-
-## 2. Installation and usage (Windows PowerShell)
-
-Run these commands from the project directory. You can run from source with Go 1.27.3 or later. A Windows `.exe` build is also provided separately.
+Obtain your own [approved CurseForge API key](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key). The tool uses the [official API](https://docs.curseforge.com/rest-api/) and respects project availability and third-party distribution settings. Missing/withheld files are reported; pins do not bypass distribution restrictions.
 
 ```powershell
-Copy-Item .env.example .env
-if (!(Test-Path .mods)) { Copy-Item .mods.example .mods }
-notepad .env      # Enter CURSEFORGE_API_KEY=...
-notepad .mods     # Edit the list of project URLs to download
-
-go run . -dry-run          # Select compatible latest releases via the API and write plan.json
-go run .                   # Download and validate JARs
-go run . -verify-only      # Revalidate files in manifest.json offline
-go run . -force            # Safely redownload existing identical files
+go -C server test ./...
+go -C server vet ./...
+.\scripts\build.ps1
 ```
 
-To use the binary instead of the source, replace `go run .` with `./cfmodsync.exe`.
-
-Example configuration (`.env`):
-
-```dotenv
-CURSEFORGE_API_KEY=YOUR_APPROVED_KEY
-MC_VERSION=1.20.1
-RELEASE_CHANNEL=all
-MOD_LIST=.mods
-AUTO_DEPS=true
-```
-
-If `OUTPUT_DIR` is omitted, downloads are **separated by Minecraft version**, for example in `downloads/1.20.1-forge/`. Changing to 1.21.1 also changes the default directory to `downloads/1.21.1-forge/`.
-
-Example input (`.mods`):
-
-```text
-# One project URL per line. Do not use download/latest, /files/123, or other non-project URLs.
-https://www.curseforge.com/minecraft/mc-mods/create
-https://www.curseforge.com/minecraft/mc-mods/jei
-```
-
-`.mods.example` contains three example projects. Copy it to `.mods` and keep the projects you want, or use your existing list. `.mods` is local and excluded from Git.
-
-## 3. Command-line options
-
-| Option | Description |
-| --- | --- |
-| `-version 1.21.1` | Select a specific Minecraft version instead of the one in `.env` |
-| `-input .mods.example` | Use a different project URL list |
-| `-output ./my-mods` | Use a different JAR output directory |
-| `-channel release` | Select stable releases only (`beta`: release and beta; `all`: includes alpha) |
-| `-deps=false` | Disable automatic addition of required CurseForge dependencies |
-| `-workers 4` | Number of concurrent downloads (1–16) |
-| `-max-file-mb 1024` | Maximum download size per JAR, in MiB |
-| `-dry-run` | Query the API and write `plan.json` without downloading |
-| `-verify-only` | Revalidate files from `manifest.json` without internet access or an API key |
-| `-force` | Download an existing same-named file again, validate it, then replace it |
-| `-prune` | After a successful run, validate and delete only unneeded JARs managed by the previous manifest |
-
-`-prune` runs only at the end of a fully successful download. Avoid running the tool directly in a `.minecraft/mods` directory. Download and validate files in a separate output directory first, then copy the files you need.
-
-## 4. Selection and validation rules
-
-1. Validate the host and path of each supplied URL and extract only an exact `slug`.
-2. Confirm the exact project ID using CurseForge `GET /v1/mods/search?gameId=432&classId=6&slug=...`.
-3. Paginate `GET /v1/mods/{modId}/files?gameVersion=<MC_VERSION>&modLoaderType=1` **through the last page**.
-4. Check `isAvailable`, the Minecraft version, the `.jar` extension, and Forge compatibility; exclude server packs, source packs, and unpublished files. If a file has no loader tags at all, rely on the API's Forge-filtered result.
-5. Among candidates in the allowed release channels, select the file with the latest `FileDate`. Break ties by File ID.
-6. Use the **actual API download URL** from `GET /v1/mods/{modId}/files/{fileId}/download-url`, not `/download/latest` from a project page.
-7. Download to a `.partial` temporary file. Move it to `.jar` only after size, SHA-1/MD5, and ZIP/CRC validation. Send CDN credentials in an `x-api-key` header and remove that header when redirected to another domain.
-8. Record failed items in `manifest.json` under `errors` and continue. The process exits with code `1` if any item fails.
-
-## 5. Limitations and cautions
-
-- **Live downloads require a valid, approved API key.** Automated tests use local mock HTTP/TLS servers and include a C# client-to-Go-server download round trip. API access and CDN downloads depend on the configured key and each project's distribution permissions.
-- Tag compatibility depends on metadata supplied by API publishers. The tool does not automatically resolve minimum Forge versions in `mods.toml`, other mods' version ranges, or conflicts.
-- **Vehicle content packs and bundle projects** can switch pack families between releases in the same CurseForge project. For example, Blue Seoul Vehicles may switch from the Garam to the Narae family. The newest project-wide `1.20.1/Forge` file is not guaranteed to succeed the pack you installed. Pin a specific file manually if needed.
-- `RELEASE_CHANNEL=all` includes alpha and beta files. For regular play, consider restricting it to `beta` or `release`. Projects that publish only snapshot or alpha builds may then have no selected file.
-- Without `-prune`, older JARs for the same mod may remain in the output directory after an update. Downloading directly into a Minecraft mods directory is discouraged.
-- Forge and NeoForge are distinct. Changing `MC_VERSION` changes only the **Minecraft target version for Forge**; it does not switch to NeoForge.
-
-## 6. Development and testing
-
-The tool uses only the Go standard library (no external Go modules).
-
-```bash
-go test -race ./...
-go vet ./...
-go build -o cfmodsync .
-```
-
-Tests cover URL parsing, newest-file selection, Minecraft version and loader exclusion, release channels, SHA-1 integrity, ZIP CRC, mock-API integration downloads, required dependency addition, rerun caching and damaged-file recovery, and prevention of authentication-header leakage on cross-domain redirects.
-
-The race detector requires CGO and a supported C compiler. Use `go test ./...` when that toolchain is unavailable. `scripts/build.ps1` also runs server cache/authentication/concurrency tests and the C# download integration checks. Run `dotnet build client/CfModSync.Client/CfModSync.Client.csproj -c Release` to build only the Windows client.
+`scripts/build.ps1` also runs a real C# client against a Go server with a local mock CurseForge service, then packages both components and dependency licenses. `-Race` requires CGO and a supported C compiler. Regression tests cover Forge-specific version selection, dependency backtracking, missing requests, baseline review, cache persistence/repair, concurrent fills, credential redaction and client hash validation.

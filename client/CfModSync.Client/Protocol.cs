@@ -13,10 +13,20 @@ public static class Protocol
 
 public sealed record JobRequest(
     string[] ProjectUrls, string MinecraftVersion, string ReleaseChannel,
-    bool IncludeDependencies, bool Refresh);
+    bool IncludeDependencies, bool Refresh)
+{
+    public string ForgeVersion { get; init; } = "";
+    public InstalledFile[] InstalledFiles { get; init; } = [];
+    public bool AllowReviewedChanges { get; init; }
+}
 
 public sealed record JobSnapshot
 {
+    public string ForgeVersion { get; init; } = "";
+    public string[] RequestedProjects { get; init; } = [];
+    public string Detail { get; init; } = "";
+    public JobIssue[] Warnings { get; init; } = [];
+    public CompatibilityReport? Compatibility { get; init; }
     public string Id { get; init; } = "";
     public string State { get; init; } = "";
     public string MinecraftVersion { get; init; } = "";
@@ -36,6 +46,8 @@ public sealed record VerifiedFile(long SizeBytes, string Sha256, string Integrit
 
 public sealed record JarFile
 {
+    public JarMetadata? Metadata { get; init; }
+    public string[] RequiredBy { get; init; } = [];
     public string Name { get; init; } = "";
     public string Slug { get; init; } = "";
     public string ProjectUrl { get; init; } = "";
@@ -58,6 +70,41 @@ public sealed record JarFile
 
 public sealed record ClientManifest(
     int SchemaVersion, string GeneratedAt, string MinecraftVersion, string ModLoader,
-    string ReleaseChannel, JarFile[] Entries, JobIssue[] Errors);
+    string ReleaseChannel, JarFile[] Entries, JobIssue[] Errors)
+{
+    public string ForgeVersion { get; init; } = "";
+    public string[] RequestedProjects { get; init; } = [];
+    public JobIssue[] Warnings { get; init; } = [];
+    public CompatibilityReport? Compatibility { get; init; }
+}
 
 public sealed record TransferProgress(string Filename, long Received, long Total);
+
+public sealed record CompatibilityReport
+{
+    public string State { get; init; } = "";
+    public int CheckedFiles { get; init; }
+    public string ForgeVersion { get; init; } = "";
+    public bool RequiresReview { get; init; }
+    public JobIssue[] Errors { get; init; } = [];
+    public JobIssue[] Warnings { get; init; } = [];
+    public ModChange[] Changes { get; init; } = [];
+}
+public sealed record ModChange(string Kind, string ModId, string Previous, string Current, string OldVersion, string NewVersion);
+public sealed record ModIdentity(string Id, string Version, bool Bundled)
+{
+    public string Bundle { get; init; } = "";
+}
+public sealed record JarMetadata(ModIdentity[] Mods)
+{
+    public ModRequirement[] Requirements { get; init; } = [];
+    public string LoaderRange { get; init; } = "";
+    public string Loader { get; init; } = "";
+    public string[] Warnings { get; init; } = [];
+    public BundledArtifact[] Bundles { get; init; } = [];
+}
+public sealed record ModRequirement(string Owner, string Id, string Range, bool Mandatory, string Side)
+{
+    public string Bundle { get; init; } = "";
+}
+public sealed record BundledArtifact(string Key, string Version, string Range, string Parent);

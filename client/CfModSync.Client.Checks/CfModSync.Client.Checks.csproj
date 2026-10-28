@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../CfModSync.Client/BaselineReader.cs" Link="BaselineReader.cs" />
     <Compile Include="../CfModSync.Client/Protocol.cs" Link="Protocol.cs" />
     <Compile Include="../CfModSync.Client/ProjectUrls.cs" Link="ProjectUrls.cs" />
     <Compile Include="../CfModSync.Client/ServerClient.cs" Link="ServerClient.cs" />

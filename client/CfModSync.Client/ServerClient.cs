@@ -39,6 +39,8 @@ public sealed partial class ServerClient : IDisposable
 
     public async Task<JobSnapshot> CreateJobAsync(JobRequest request, CancellationToken cancellation)
     {
+        if (JsonSerializer.SerializeToUtf8Bytes(request, Protocol.Json).Length > 8 * 1024 * 1024)
+            throw new IOException("The project list and installed-mod metadata exceed the server's 8 MiB request limit.");
         using var response = await SendAsync(HttpMethod.Post, "api/v1/jobs", request, cancellation);
         return await ReadJob(response, cancellation);
     }
@@ -179,9 +181,15 @@ public sealed partial class ServerClient : IDisposable
         try
         {
             var manifest = new ClientManifest(1, DateTimeOffset.UtcNow.ToString("O"), job.MinecraftVersion,
-                "Forge", job.ReleaseChannel, files, errors);
+                "Forge", job.ReleaseChannel, files, errors)
+            {
+                ForgeVersion = job.ForgeVersion, RequestedProjects = job.RequestedProjects,
+                Warnings = job.Warnings, Compatibility = job.Compatibility
+            };
             await File.WriteAllTextAsync(path, JsonSerializer.Serialize(manifest, Protocol.Json), cancellation);
-            File.Move(path, Path.Combine(output, "manifest.json"), true);
+            var reportName = errors.Length == 0 && job.State == "completed" ? "manifest.json" :
+                $"failed-job-{(JobId().IsMatch(job.Id) ? job.Id : Guid.NewGuid().ToString("N"))}.json";
+            File.Move(path, Path.Combine(output, reportName), true);
         }
         finally { if (File.Exists(path)) File.Delete(path); }
     }

@@ -20,6 +20,95 @@ import (
 
 const defaultMaxFileMB = 1024
 
+func checkOutputContents(output string, entries []Entry, prune bool, maxBytes int64) error {
+	items, err := os.ReadDir(output)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	current := make(map[string]bool)
+	for _, entry := range entries {
+		current[strings.ToLower(entry.Filename)] = true
+	}
+	previous := make(map[string]Entry)
+	if prune {
+		manifest, err := readManifest(filepath.Join(output, "manifest.json"))
+		if err != nil {
+			return err
+		}
+		for _, entry := range manifest.Entries {
+			previous[entry.Filename] = entry
+		}
+	}
+	for _, item := range items {
+		if item.IsDir() || !strings.EqualFold(filepath.Ext(item.Name()), ".jar") || current[strings.ToLower(item.Name())] {
+			continue
+		}
+		old, managed := previous[item.Name()]
+		if !prune || !managed || old.Verified == nil {
+			return fmt.Errorf("output contains unselected JAR %s; choose a clean folder or use -prune for previously managed files", item.Name())
+		}
+		verified, err := verifyJar(filepath.Join(output, item.Name()), File{Hashes: old.Hashes, FileLength: old.ExpectedLength}, maxBytes)
+		if err != nil || verified.SHA256 != old.Verified.SHA256 {
+			return fmt.Errorf("unselected output JAR %s changed; refusing to remove it", item.Name())
+		}
+	}
+	return nil
+}
+
+func copyVerifiedJar(ctx context.Context, source, output string, expected File, maxBytes int64) (string, Verified, error) {
+	if !safeJarName(expected.FileName) {
+		return "", Verified{}, errors.New("unsafe output filename")
+	}
+	if err := os.MkdirAll(output, 0755); err != nil {
+		return "", Verified{}, err
+	}
+	target := filepath.Join(output, expected.FileName)
+	if _, err := os.Stat(target); err == nil {
+		verified, err := verifyJar(target, expected, maxBytes)
+		if err != nil {
+			return "", Verified{}, fmt.Errorf("existing %s failed verification (%w); remove it or use -force", expected.FileName, err)
+		}
+		return "cached", verified, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", Verified{}, err
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return "", Verified{}, err
+	}
+	defer in.Close()
+	out, err := os.CreateTemp(output, ".cfmodsync-install-*.partial")
+	if err != nil {
+		return "", Verified{}, err
+	}
+	defer os.Remove(out.Name())
+	_, err = io.Copy(out, io.LimitReader(in, maxBytes+1))
+	closeErr := out.Close()
+	if err != nil {
+		return "", Verified{}, err
+	}
+	if closeErr != nil {
+		return "", Verified{}, closeErr
+	}
+	if ctx.Err() != nil {
+		return "", Verified{}, ctx.Err()
+	}
+	verified, err := verifyJar(out.Name(), expected, maxBytes)
+	if err != nil {
+		return "", Verified{}, err
+	}
+	if _, err := os.Stat(target); err == nil {
+		return "", Verified{}, errors.New("target appeared while installing; refusing overwrite")
+	}
+	if err := os.Rename(out.Name(), target); err != nil {
+		return "", Verified{}, err
+	}
+	return "downloaded", verified, nil
+}
+
 type Verified struct {
 	Size      int64  `json:"size_bytes"`
 	SHA256    string `json:"sha256"`

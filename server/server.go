@@ -25,25 +25,30 @@ import (
 )
 
 type ServerOptions struct {
-	Listen      string
-	CacheDir    string
-	Token       string
-	Workers     int
-	MaxBytes    int64
-	MetadataTTL time.Duration
-	JobTTL      time.Duration
-	TLSCert     string
-	TLSKey      string
+	Listen         string
+	CacheDir       string
+	Token          string
+	Workers        int
+	MaxBytes       int64
+	MetadataTTL    time.Duration
+	JobTTL         time.Duration
+	TLSCert        string
+	TLSKey         string
+	CandidateLimit int
 }
 
 var upstreamURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
 
 type JobRequest struct {
-	ProjectURLs         []string `json:"project_urls"`
-	MinecraftVersion    string   `json:"minecraft_version"`
-	ReleaseChannel      string   `json:"release_channel"`
-	IncludeDependencies *bool    `json:"include_dependencies,omitempty"`
-	Refresh             bool     `json:"refresh"`
+	ForgeVersion         string          `json:"forge_version,omitempty"`
+	InstalledFiles       []InstalledFile `json:"installed_files,omitempty"`
+	AllowReviewedChanges bool            `json:"allow_reviewed_changes,omitempty"`
+	pins                 map[string]int64
+	ProjectURLs          []string `json:"project_urls"`
+	MinecraftVersion     string   `json:"minecraft_version"`
+	ReleaseChannel       string   `json:"release_channel"`
+	IncludeDependencies  *bool    `json:"include_dependencies,omitempty"`
+	Refresh              bool     `json:"refresh"`
 }
 
 type JobFile struct {
@@ -52,18 +57,23 @@ type JobFile struct {
 }
 
 type JobSnapshot struct {
-	ID               string    `json:"id"`
-	State            string    `json:"state"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	MinecraftVersion string    `json:"minecraft_version"`
-	ReleaseChannel   string    `json:"release_channel"`
-	Total            int       `json:"total"`
-	Completed        int       `json:"completed"`
-	CacheHits        int       `json:"cache_hits"`
-	SelectionCached  bool      `json:"selection_cached"`
-	Files            []JobFile `json:"files"`
-	Errors           []Issue   `json:"errors"`
+	ForgeVersion      string               `json:"forge_version,omitempty"`
+	RequestedProjects []string             `json:"requested_projects"`
+	Detail            string               `json:"detail,omitempty"`
+	Warnings          []Issue              `json:"warnings,omitempty"`
+	Compatibility     *CompatibilityReport `json:"compatibility,omitempty"`
+	ID                string               `json:"id"`
+	State             string               `json:"state"`
+	CreatedAt         time.Time            `json:"created_at"`
+	UpdatedAt         time.Time            `json:"updated_at"`
+	MinecraftVersion  string               `json:"minecraft_version"`
+	ReleaseChannel    string               `json:"release_channel"`
+	Total             int                  `json:"total"`
+	Completed         int                  `json:"completed"`
+	CacheHits         int                  `json:"cache_hits"`
+	SelectionCached   bool                 `json:"selection_cached"`
+	Files             []JobFile            `json:"files"`
+	Errors            []Issue              `json:"errors"`
 }
 
 type serverJob struct {
@@ -78,6 +88,7 @@ func (j *serverJob) snapshot() JobSnapshot {
 	s := j.data
 	s.Files = append([]JobFile{}, s.Files...)
 	s.Errors = append([]Issue{}, s.Errors...)
+	s.Warnings = append([]Issue{}, s.Warnings...)
 	return s
 }
 
@@ -96,6 +107,9 @@ type modServer struct {
 }
 
 func newModServer(ctx context.Context, cfg ServerOptions, c *Client, downloads *http.Client) (*modServer, error) {
+	if cfg.CandidateLimit == 0 {
+		cfg.CandidateLimit = 200
+	}
 	if cfg.Workers < 1 || cfg.Workers > 16 || cfg.MaxBytes < 1 || cfg.MetadataTTL <= 0 || cfg.JobTTL <= 0 {
 		return nil, errors.New("invalid server limits")
 	}
@@ -124,6 +138,7 @@ func runServer(args []string) error {
 	flags.StringVar(&cfg.CacheDir, "cache", envDefault("SERVER_CACHE_DIR", "cache"), "persistent server cache directory")
 	flags.StringVar(&cfg.Token, "token", envDefault("SERVER_TOKEN", ""), "client bearer token (use SERVER_TOKEN to avoid shell history)")
 	flags.IntVar(&cfg.Workers, "workers", 4, "maximum simultaneous upstream downloads (1-16)")
+	flags.IntVar(&cfg.CandidateLimit, "candidate-limit", 200, "maximum files inspected per project; fail explicitly if exceeded (1-1000)")
 	maxMB := flags.Int("max-file-mb", defaultMaxFileMB, "maximum JAR size in MiB")
 	flags.DurationVar(&cfg.MetadataTTL, "metadata-ttl", 15*time.Minute, "reuse latest-file selections for this duration")
 	flags.DurationVar(&cfg.JobTTL, "job-ttl", time.Hour, "retain completed jobs in memory for this duration")
@@ -139,6 +154,9 @@ func runServer(args []string) error {
 		return errors.New("max-file-mb must be between 1 and 4096")
 	}
 	cfg.MaxBytes = int64(*maxMB) << 20
+	if cfg.CandidateLimit < 1 || cfg.CandidateLimit > 1000 {
+		return errors.New("candidate-limit must be between 1 and 1000")
+	}
 	host, _, err := net.SplitHostPort(cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("invalid listen address: %w", err)
@@ -250,7 +268,7 @@ func (s *modServer) createJob(w http.ResponseWriter, r *http.Request) {
 		s.apiError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var request JobRequest
@@ -266,12 +284,34 @@ func (s *modServer) createJob(w http.ResponseWriter, r *http.Request) {
 		request.MinecraftVersion = "1.20.1"
 	}
 	if request.ReleaseChannel == "" {
-		request.ReleaseChannel = "all"
+		request.ReleaseChannel = "release"
 	}
 	if !mcVersionPattern.MatchString(request.MinecraftVersion) || len(request.MinecraftVersion) > 64 ||
 		(request.ReleaseChannel != "all" && request.ReleaseChannel != "beta" && request.ReleaseChannel != "release") {
 		s.apiError(w, http.StatusBadRequest, "invalid Minecraft version or release channel")
 		return
+	}
+	if request.ForgeVersion != "" && !forgeVersionPattern.MatchString(request.ForgeVersion) {
+		s.apiError(w, http.StatusBadRequest, "Forge version must be a number such as 47.3.0")
+		return
+	}
+	if len(request.InstalledFiles) > 500 {
+		s.apiError(w, http.StatusBadRequest, "baseline exceeds 500 files")
+		return
+	}
+	baselineNames := make(map[string]bool)
+	for _, file := range request.InstalledFiles {
+		hash, err := hex.DecodeString(file.SHA256)
+		name := strings.ToLower(file.Filename)
+		if !safeJarName(file.Filename) || err != nil || len(hash) != 32 || baselineNames[name] || len(file.ModsTOML) > metadataLimit || len(file.Manifest) > metadataLimit {
+			s.apiError(w, http.StatusBadRequest, "invalid or duplicate baseline metadata")
+			return
+		}
+		if _, err := parseForgeMetadata(file.ModsTOML, file.Manifest); err != nil {
+			s.apiError(w, http.StatusBadRequest, "invalid baseline mods.toml")
+			return
+		}
+		baselineNames[name] = true
 	}
 	if len(request.ProjectURLs) == 0 || len(request.ProjectURLs) > 500 {
 		s.apiError(w, http.StatusBadRequest, "provide between 1 and 500 project URLs")
@@ -279,11 +319,19 @@ func (s *modServer) createJob(w http.ResponseWriter, r *http.Request) {
 	}
 	seen := make(map[string]bool)
 	var slugs []string
+	request.pins = make(map[string]int64)
 	for _, raw := range request.ProjectURLs {
-		slug, err := parseProjectURL(raw)
+		slug, pin, err := parseProjectInput(raw)
 		if err != nil {
-			s.apiError(w, http.StatusBadRequest, "every project must be a canonical CurseForge Minecraft mod URL")
+			s.apiError(w, http.StatusBadRequest, "use canonical CurseForge project URLs or /files/<id> URLs")
 			return
+		}
+		if pin > 0 {
+			if previous := request.pins[slug]; previous > 0 && previous != pin {
+				s.apiError(w, http.StatusBadRequest, "conflicting pinned files")
+				return
+			}
+			request.pins[slug] = pin
 		}
 		if !seen[slug] {
 			slugs = append(slugs, slug)
@@ -300,6 +348,7 @@ func (s *modServer) createJob(w http.ResponseWriter, r *http.Request) {
 	job := &serverJob{cancel: cancel, data: JobSnapshot{
 		ID: hex.EncodeToString(random[:]), State: "queued", CreatedAt: now, UpdatedAt: now,
 		MinecraftVersion: request.MinecraftVersion, ReleaseChannel: request.ReleaseChannel,
+		ForgeVersion: request.ForgeVersion, RequestedProjects: append([]string{}, slugs...),
 		Files: []JobFile{}, Errors: []Issue{},
 	}}
 	s.mu.Lock()
@@ -354,83 +403,114 @@ func (s *modServer) cancelJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *modServer) runJob(ctx context.Context, job *serverJob, request JobRequest, slugs []string) {
-	defer func() {
-		job.cancel()
-		s.mu.Lock()
-		s.active--
-		s.mu.Unlock()
-	}()
+	defer func() { job.cancel(); s.mu.Lock(); s.active--; s.mu.Unlock() }()
 	job.mu.Lock()
 	job.data.State = "resolving"
 	job.data.UpdatedAt = time.Now().UTC()
 	job.mu.Unlock()
-	deps := request.IncludeDependencies == nil || *request.IncludeDependencies
-	options := Options{Version: request.MinecraftVersion, Channel: request.ReleaseChannel, Deps: deps}
-	selections, issues, cached := s.resolveCached(ctx, slugs, options, request.Refresh)
+	options := Options{
+		Version: request.MinecraftVersion, ForgeVersion: request.ForgeVersion, Channel: request.ReleaseChannel,
+		Deps: request.IncludeDependencies == nil || *request.IncludeDependencies, Workers: s.cfg.Workers,
+		PinnedFiles: request.pins, CandidateLimit: s.cfg.CandidateLimit, AllowReviewedChanges: request.AllowReviewedChanges,
+		Progress: func(detail string) {
+			job.mu.Lock()
+			job.data.Detail = detail
+			job.data.UpdatedAt = time.Now().UTC()
+			job.mu.Unlock()
+		},
+	}
+	selections, issues, warnings, cached := s.resolveCached(ctx, slugs, options, request.Refresh)
+	entries := preparedEntries(selections)
+	missing := missingRequested(slugs, entries, issues)
+	for i := range missing {
+		missing[i].Error = s.cleanError(errors.New(missing[i].Error))
+	}
 	job.mu.Lock()
 	job.data.SelectionCached = cached
-	job.data.Total = len(selections)
-	for _, issue := range issues {
-		issue.Error = s.cleanError(errors.New(issue.Error))
-		job.data.Errors = append(job.data.Errors, issue)
+	job.data.State = "validating"
+	job.data.Total = len(entries) + len(missing)
+	job.data.Files = make([]JobFile, len(entries)+len(missing))
+	for i, entry := range entries {
+		job.data.Files[i] = JobFile{Entry: entry}
 	}
-	for _, selection := range selections {
-		job.data.Files = append(job.data.Files, JobFile{Entry: manifestEntry(selection)})
+	for i, entry := range missing {
+		job.data.Files[len(entries)+i] = JobFile{Entry: entry}
 	}
-	job.data.State = "caching"
-	job.data.UpdatedAt = time.Now().UTC()
+	job.data.Completed = len(missing)
 	job.mu.Unlock()
-	var wg sync.WaitGroup
-	work := make(chan int)
-	for worker := 0; worker < s.cfg.Workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for index := range work {
-				entry, err := s.ensureFile(ctx, selections[index])
-				file := JobFile{Entry: entry}
-				if err != nil {
-					file.Entry = manifestEntry(selections[index])
-					file.Status = "failed"
-					file.Error = s.cleanError(err)
-				} else {
-					file.DownloadPath = fmt.Sprintf("/api/v1/files/%d/%d", entry.ModID, entry.FileID)
-				}
-				job.mu.Lock()
-				job.data.Files[index] = file
-				job.data.Completed++
-				if err != nil {
-					job.data.Errors = append(job.data.Errors, Issue{Project: file.Slug, Error: file.Error})
-				} else if entry.Status == "cached" {
-					job.data.CacheHits++
-				}
-				job.data.UpdatedAt = time.Now().UTC()
-				job.mu.Unlock()
+	for i, selection := range selections {
+		if selection.prepared == nil {
+			entry, err := s.ensureFile(ctx, selection)
+			if err != nil {
+				entry = manifestEntry(selection)
+				entry.Status = "failed"
+				entry.Error = s.cleanError(err)
+				issues = append(issues, Issue{entry.Slug, entry.Error})
 			}
-		}()
-	}
-	for index := range selections {
-		select {
-		case work <- index:
-		case <-ctx.Done():
+			entry.RequiredBy = entries[i].RequiredBy
+			entries[i] = entry
 		}
-		if ctx.Err() != nil {
-			break
+		job.mu.Lock()
+		job.data.Files[i] = JobFile{Entry: entries[i]}
+		job.data.Completed++
+		if entries[i].Status == "cached" {
+			job.data.CacheHits++
 		}
+		job.data.UpdatedAt = time.Now().UTC()
+		job.mu.Unlock()
 	}
-	close(work)
-	wg.Wait()
+	report := validateCompatibility(entries, options, request.InstalledFiles, false)
+	if len(issues) > 0 || len(missing) > 0 {
+		report.State = "failed"
+		report.Errors = append(report.Errors, issues...)
+	}
+	issues = append(issues, report.Errors...)
+	if len(missing) > 0 && len(issues) == 0 {
+		issues = append(issues, Issue{"coverage", "Some requested projects are missing."})
+	}
+	if report.RequiresReview && !options.AllowReviewedChanges {
+		issues = append(issues, Issue{"baseline", "Review required: baseline mods would be removed, downgraded, or replaced. Inspect the report, pin files, or explicitly allow reviewed changes."})
+	}
+	warnings = append(warnings, report.Warnings...)
 	job.mu.Lock()
 	defer job.mu.Unlock()
+	job.data.Errors = s.sanitizeIssues(issues)
+	job.data.Warnings = s.sanitizeIssues(warnings)
+	report.Errors = s.sanitizeIssues(report.Errors)
+	report.Warnings = s.sanitizeIssues(report.Warnings)
+	job.data.Compatibility = &report
+	job.data.Detail = ""
 	job.data.State = "completed"
 	if ctx.Err() != nil {
 		job.data.State = "cancelled"
-	} else if len(job.data.Errors) != 0 {
+	} else if len(job.data.Errors) > 0 {
 		job.data.State = "failed"
+	}
+	// Do not expose a batch for installation before all requirements pass.
+	if job.data.State == "completed" {
+		for i := range entries {
+			entry := &job.data.Files[i]
+			if entry.Verified != nil {
+				entry.DownloadPath = fmt.Sprintf("/api/v1/files/%d/%d", entry.ModID, entry.FileID)
+			}
+		}
 	}
 	job.data.UpdatedAt = time.Now().UTC()
 }
 
+func (s *modServer) sanitizeIssues(issues []Issue) []Issue {
+	result := []Issue{}
+	seen := make(map[string]bool)
+	for _, issue := range issues {
+		issue.Error = s.cleanError(errors.New(issue.Error))
+		key := issue.Project + "\x00" + issue.Error
+		if !seen[key] {
+			result = append(result, issue)
+			seen[key] = true
+		}
+	}
+	return result
+}
 func positiveID(raw string) (int64, error) {
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != raw {

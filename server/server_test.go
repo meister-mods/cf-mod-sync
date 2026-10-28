@@ -195,6 +195,81 @@ func TestServerCacheLifecycleAndRestart(t *testing.T) {
 	}
 }
 
+func TestWarmCacheBypassesColdScanAndDownloadSlots(t *testing.T) {
+	fixture := newCacheFixture(t, nil)
+	service := fixture.service(t, t.TempDir())
+	if job := startTestJob(t, service, false); job.State != "completed" {
+		t.Fatalf("could not prime cache: %+v", job)
+	}
+	// Simulate an unrelated cold plan and all network workers being occupied.
+	service.planSlot <- struct{}{}
+	for i := 0; i < cap(service.slots); i++ {
+		service.slots <- struct{}{}
+	}
+	defer func() {
+		<-service.planSlot
+		for len(service.slots) > 0 {
+			<-service.slots
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	items, issues, _, cached := service.resolveCached(ctx, []string{"create"}, Options{Version: "1.20.1", Channel: "all", Deps: true, PinnedFiles: map[string]int64{}}, false)
+	if !cached || len(issues) != 0 || len(items) != 2 {
+		t.Fatalf("warm plan waited for cold work: cached=%v items=%d issues=%+v", cached, len(items), issues)
+	}
+	for _, item := range items {
+		entry, err := service.ensureFile(ctx, item)
+		if err != nil || entry.Verified == nil || entry.Status != "cached" {
+			t.Fatalf("warm file waited for a network worker: %+v %v", entry, err)
+		}
+	}
+}
+
+func TestBaselineReviewGatesBatchDownloadPaths(t *testing.T) {
+	fixture := newCacheFixture(t, nil)
+	service := fixture.service(t, t.TempDir())
+	for _, allow := range []bool{false, true} {
+		body, _ := json.Marshal(JobRequest{
+			ProjectURLs: []string{projectURL("create")}, MinecraftVersion: "1.20.1", ForgeVersion: "47.4.28",
+			ReleaseChannel: "release", AllowReviewedChanges: allow,
+			InstalledFiles: []InstalledFile{{Filename: "missing-original.jar", SHA256: strings.Repeat("0", 64),
+				ModsTOML: "modLoader=\"javafml\"\nloaderVersion=\"[47,)\"\n[[mods]]\nmodId=\"missing_original\"\nversion=\"1.0\"\n"}},
+		})
+		response := requestAPI(service, "POST", "/api/v1/jobs", body)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("create: %d %s", response.Code, response.Body)
+		}
+		var job JobSnapshot
+		if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !terminalJob(job.State) && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			response = requestAPI(service, "GET", "/api/v1/jobs/"+job.ID, nil)
+			if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if job.Compatibility == nil || !job.Compatibility.RequiresReview || len(job.Compatibility.Changes) == 0 {
+			t.Fatalf("missing baseline mod not reported: %+v", job)
+		}
+		expected := "failed"
+		if allow {
+			expected = "completed"
+		}
+		if job.State != expected {
+			t.Fatalf("allow=%v state=%s errors=%+v", allow, job.State, job.Errors)
+		}
+		for _, file := range job.Files {
+			if (file.DownloadPath != "") != allow {
+				t.Fatalf("allow=%v download path=%q", allow, file.DownloadPath)
+			}
+		}
+	}
+}
+
 func TestConcurrentCacheFillAndIndependentCancellation(t *testing.T) {
 	release := make(chan struct{})
 	fixture := newCacheFixture(t, release)
@@ -235,57 +310,61 @@ func TestConcurrentCacheFillAndIndependentCancellation(t *testing.T) {
 	}
 }
 
-func TestReadyCacheFileIsDeliveredBeforeBatchCompletes(t *testing.T) {
+func TestBatchWaitsForCompatibilityValidation(t *testing.T) {
 	release := make(chan struct{})
-	defer close(release)
+	var once sync.Once
+	defer once.Do(func() { close(release) })
 	fixture := newCacheFixture(t, release)
 	service := fixture.service(t, t.TempDir())
 	items, issues := resolveMods(context.Background(), service.client, []string{"create"}, Options{Version: "1.20.1", Channel: "all"})
 	if len(issues) != 0 || len(items) != 1 {
 		t.Fatal(issues)
 	}
-	item := items[0]
-	dir := service.fileDir(item.mod.ID, item.file.ID)
+	dir := service.fileDir(items[0].mod.ID, items[0].file.ID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, item.file.FileName)
-	if err := os.WriteFile(path, fixture.jar, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, items[0].file.FileName), fixture.jar, 0600); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(JobRequest{ProjectURLs: []string{projectURL("create")}})
 	response := requestAPI(service, "POST", "/api/v1/jobs", body)
-	if response.Code != http.StatusAccepted {
-		t.Fatal(response.Body)
-	}
 	var job JobSnapshot
 	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
+	for fixture.blobs.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if fixture.blobs.Load() == 0 {
+		t.Fatal("dependency fill did not start")
+	}
+	response = requestAPI(service, "GET", "/api/v1/jobs/"+job.ID, nil)
+	json.Unmarshal(response.Body.Bytes(), &job)
+	for _, file := range job.Files {
+		if file.DownloadPath != "" {
+			t.Fatal("file was released before batch compatibility validation")
+		}
+	}
+	once.Do(func() { close(release) })
 	for time.Now().Before(deadline) {
 		response = requestAPI(service, "GET", "/api/v1/jobs/"+job.ID, nil)
-		if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
-			t.Fatal(err)
-		}
-		for _, file := range job.Files {
-			if file.DownloadPath == "" {
-				continue
-			}
-			if job.State != "caching" {
-				t.Fatalf("batch should still be filling its missing dependency: %s", job.State)
-			}
-			response := requestAPI(service, "GET", file.DownloadPath, nil)
-			if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), fixture.jar) {
-				t.Fatal("ready cache file was not immediately deliverable")
-			}
-			return
+		json.Unmarshal(response.Body.Bytes(), &job)
+		if terminalJob(job.State) {
+			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("cached file did not become ready while another download was blocked")
+	if job.State != "completed" {
+		t.Fatalf("unexpected job: %+v", job)
+	}
+	for _, file := range job.Files {
+		if file.DownloadPath == "" {
+			t.Fatal("validated batch file was not released")
+		}
+	}
 }
-
 func TestServerAuthorizationValidationAndRedaction(t *testing.T) {
 	fixture := newCacheFixture(t, nil)
 	service := fixture.service(t, t.TempDir())
