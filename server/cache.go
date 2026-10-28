@@ -37,19 +37,20 @@ func (s *modServer) resolveCached(ctx context.Context, slugs []string, options O
 	sorted := append([]string{}, slugs...)
 	sort.Strings(sorted)
 	keyData, _ := json.Marshal(struct {
-		Slugs   []string
-		Version string
-		Channel string
-		Deps    bool
-		Forge   string
-		Pins    map[string]int64
-		Policy  int
-	}{sorted, options.Version, options.Channel, options.Deps, options.ForgeVersion, options.PinnedFiles, 6})
+		Slugs              []string
+		Version            string
+		Channel            string
+		ExcludePrereleases bool
+		Deps               bool
+		Forge              string
+		Pins               map[string]int64
+		Policy             int
+	}{sorted, options.Version, options.Channel, options.ExcludePrereleases, options.Deps, options.ForgeVersion, options.PinnedFiles, 7})
 	sum := sha256.Sum256(keyData)
 	path := filepath.Join(s.cfg.CacheDir, "selections", hex.EncodeToString(sum[:])+".json")
 	readPlan := func() ([]selected, []Issue, bool) {
 		var saved selectionRecord
-		if !refresh && readCacheJSON(path, &saved) == nil && saved.PolicyVersion == 6 && len(saved.Items) > 0 &&
+		if !refresh && readCacheJSON(path, &saved) == nil && saved.PolicyVersion == 7 && len(saved.Items) > 0 &&
 			time.Since(saved.CreatedAt) >= 0 && time.Since(saved.CreatedAt) < s.cfg.MetadataTTL {
 			var result []selected
 			valid := len(saved.Items) <= 500
@@ -58,6 +59,9 @@ func (s *modServer) resolveCached(ctx context.Context, slugs []string, options O
 					!item.Mod.IsAvailable || !item.Mod.AllowModDistribution ||
 					!hasGameVersion(item.File, options.Version) || !loaderCompatible(item.File) ||
 					(!releaseAllowed(item.File.ReleaseType, options.Channel) && options.PinnedFiles[item.Mod.Slug] != item.File.ID) {
+					valid = false
+				}
+				if options.ExcludePrereleases && prereleaseReason(releaseName(item.File.ReleaseType), item.File.FileName, nil) != "" {
 					valid = false
 				}
 				result = append(result, selected{mod: item.Mod, file: item.File, requested: item.Requested})
@@ -83,7 +87,7 @@ func (s *modServer) resolveCached(ctx context.Context, slugs []string, options O
 	}
 	result, issues, warnings := resolveCompatible(ctx, s.client, slugs, options, s.ensureFile)
 	if len(issues) == 0 && len(result) > 0 {
-		record := selectionRecord{CreatedAt: time.Now().UTC(), PolicyVersion: 6, Warnings: warnings}
+		record := selectionRecord{CreatedAt: time.Now().UTC(), PolicyVersion: 7, Warnings: warnings}
 		for _, item := range result {
 			// Persist metadata only, never signed CDN URLs or API credentials.
 			item.file.DownloadURL = ""

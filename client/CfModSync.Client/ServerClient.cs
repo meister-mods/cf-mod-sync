@@ -183,7 +183,7 @@ public sealed partial class ServerClient : IDisposable
             var manifest = new ClientManifest(1, DateTimeOffset.UtcNow.ToString("O"), job.MinecraftVersion,
                 "Forge", job.ReleaseChannel, files, errors)
             {
-                ForgeVersion = job.ForgeVersion, RequestedProjects = job.RequestedProjects,
+                ForgeVersion = job.ForgeVersion, RequestedProjects = job.RequestedProjects, ExcludePrereleases = job.ExcludePrereleases,
                 Warnings = job.Warnings, Compatibility = job.Compatibility
             };
             await File.WriteAllTextAsync(path, JsonSerializer.Serialize(manifest, Protocol.Json), cancellation);

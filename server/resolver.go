@@ -274,17 +274,28 @@ func (r *compatibleResolver) candidates(id int64) []selected {
 	seen := make(map[int64]bool)
 	for _, file := range files {
 		channel := r.cfg.Channel
-		if pin > 0 {
+		if r.cfg.ExcludePrereleases {
+			channel = "release"
+		} else if pin > 0 {
 			channel = "all"
 		}
 		_, err := selectLatest([]File{file}, r.cfg.Version, channel)
+		if err == nil && r.cfg.ExcludePrereleases {
+			if reason := prereleaseReason(releaseName(file.ReleaseType), file.FileName, nil); reason != "" {
+				err = fmt.Errorf("prerelease excluded: %s", reason)
+			}
+		}
 		if err == nil && (file.ModID == 0 || file.ModID == id) && !seen[file.ID] {
 			eligible = append(eligible, file)
 			seen[file.ID] = true
 		}
 	}
 	if len(eligible) == 0 {
-		r.lastErrors = []Issue{{mod.Slug, fmt.Sprintf("No available Forge %s JAR matches the release policy or pinned file.", r.cfg.Version)}}
+		message := fmt.Sprintf("No available Forge %s JAR matches the release policy or pinned file.", r.cfg.Version)
+		if r.cfg.ExcludePrereleases {
+			message += " Exclude prereleases is enabled, including for pinned files; no prerelease fallback is permitted."
+		}
+		r.lastErrors = []Issue{{mod.Slug, message}}
 		return nil
 	}
 	limit := r.cfg.CandidateLimit
@@ -329,7 +340,11 @@ func (r *compatibleResolver) candidates(id int64) []selected {
 				entry, err := r.fetch(r.ctx, candidate)
 				if err == nil {
 					kind := metadataPrerelease(entry.Metadata)
-					if pin == 0 && (r.cfg.Channel == "release" && kind != "" || r.cfg.Channel == "beta" && kind == "alpha") {
+					if r.cfg.ExcludePrereleases {
+						if reason := prereleaseReason(releaseName(candidate.file.ReleaseType), candidate.file.FileName, entry.Metadata); reason != "" {
+							err = fmt.Errorf("prerelease excluded: %s", reason)
+						}
+					} else if pin == 0 && (r.cfg.Channel == "release" && kind != "" || r.cfg.Channel == "beta" && kind == "alpha") {
 						err = fmt.Errorf("declared %s version is excluded by the release policy", kind)
 					}
 				}

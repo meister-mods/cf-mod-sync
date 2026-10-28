@@ -36,6 +36,7 @@ func run() error {
 	flag.IntVar(&cfg.CandidateLimit, "candidate-limit", 200, "maximum candidate JARs inspected per project (1-1000)")
 	flag.StringVar(&cfg.Version, "version", envDefault("MC_VERSION", "1.20.1"), "Minecraft version")
 	flag.StringVar(&cfg.Channel, "channel", envDefault("RELEASE_CHANNEL", "release"), "release, beta, or all (includes alpha)")
+	flag.BoolVar(&cfg.ExcludePrereleases, "exclude-prereleases", envBool("EXCLUDE_PRERELEASES", false), "exclude API/filename/JAR prereleases, including pinned files")
 	flag.StringVar(&cfg.Input, "input", envDefault("MOD_LIST", "../client/.mods"), "project URLs or pinned /files/<id> URLs")
 	flag.StringVar(&cfg.Output, "output", envDefault("OUTPUT_DIR", ""), "directory for downloaded JARs (default: downloads/<version>-forge)")
 	flag.BoolVar(&cfg.Deps, "deps", envBool("AUTO_DEPS", true), "automatically include required dependencies")
@@ -89,6 +90,9 @@ func run() error {
 		}
 		if cfg.ForgeVersion != "" {
 			m.ForgeVersion = cfg.ForgeVersion
+		}
+		if cfg.ExcludePrereleases {
+			m.ExcludePrereleases = true
 		}
 		issues := verifyManifest(cfg.Output, m, cfg.MaxBytes)
 		if len(issues) > 0 {

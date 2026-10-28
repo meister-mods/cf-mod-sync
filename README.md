@@ -56,12 +56,16 @@ The client reuses identical local files after SHA-256 validation. It refuses an 
 
 ## Version selection and validation
 
+**Exclude prereleases** is enabled by default in the Windows client. It forces release-only selection and also rejects recognized prerelease markers in filenames and declared JAR versions (alpha, beta, snapshot, RC, preview, dev, nightly, and similar markers). It applies to automatic dependencies, pinned files, and cached selections. Pins cannot override this option. If no stable compatible combination exists, the job fails with a report; it never falls back to a prerelease. Uncheck the option to select beta/all policies or use pinned prereleases. The setting is saved locally.
+
+For the standalone CLI, pass `-exclude-prereleases` or set `EXCLUDE_PRERELEASES=true`. Requests to the server API use `"exclude_prereleases": true`; jobs and manifests record the value. `-dry-run` checks API labels and filenames only, since JAR versions require downloading.
+
 - The API identifies exact CurseForge projects and filters Minecraft version and Forge loader. Every requested project is accounted for, including failed projects.
 - Candidate JARs are cached and checked for HTTPS delivery, safe filenames, expected size, API SHA-1/MD5, and ZIP/CRC integrity.
 - The server reads `META-INF/mods.toml`, the main manifest section, and declared JarJar artifacts. It checks Minecraft, the selected Forge build, required mods, installed optional dependency ranges, and shared library ranges. It handles manifest version substitution, wildcards and Maven soft recommendations. Built-in FML loader requirements use the Forge major version; custom language loaders produce an explicit unchecked warning.
 - Within a common mod identity, candidates are ranked by their declared mod version using Maven-style comparison. Publication date and file ID break ties. Backtracking searches for a compatible combination, giving requested projects priority in list order.
 - A project with changing/unidentified mod identities cannot be reliably ordered by mod version. It gets an explicit warning and publication-date fallback; use file pins for content families.
-- `release` excludes API beta/alpha files and recognized declared prereleases. `beta` permits API release/beta files but rejects declared alpha builds. `all` also includes API alpha files. A specific file pin overrides release policy while still enforcing availability, integrity and runtime requirements.
+- `release` excludes API beta/alpha files and recognized declared prereleases. `beta` permits API release/beta files but rejects declared alpha builds. `all` also includes API alpha files. With **Exclude prereleases** disabled, a specific file pin overrides release policy while still enforcing availability, integrity and runtime requirements.
 - Baselines detect missing mod IDs, downgrades, renamed filename families, changed bytes for an unchanged version, and unidentified missing content packs. Review is required before releasing such a batch.
 - The default limit is 200 eligible candidates per project; exceeding it fails explicitly. Raise `-candidate-limit` up to 1000 or pin a file. The compatibility search is bounded to 500 projects and 10000 search steps.
 

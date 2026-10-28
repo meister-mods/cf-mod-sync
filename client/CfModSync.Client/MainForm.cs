@@ -27,6 +27,7 @@ public sealed class MainForm : Form
     private readonly ComboBox channel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90 };
     private readonly CheckBox dependencies = new() { Text = "Include required dependencies", Checked = true, AutoSize = true };
     private readonly CheckBox refresh = new() { Text = "Refresh latest files", AutoSize = true };
+    private readonly CheckBox excludePrereleases = new() { Text = "Exclude prereleases", Checked = true, AutoSize = true };
     private readonly TextBox output = new() { Dock = DockStyle.Fill };
     private readonly TextBox browserAddress = new() { Dock = DockStyle.Fill, Text = "https://www.curseforge.com/minecraft/search?class=mc-mods" };
     private readonly CheckBox pickLinks = new() { Text = "Add mod links when clicked", Checked = true, AutoSize = true };
@@ -103,6 +104,8 @@ public sealed class MainForm : Form
         tips.SetToolTip(forgeVersion, "Enter the exact installed Forge version. The server inspects JAR requirements and selects the highest compatible mod versions.");
         tips.SetToolTip(allowReviewedChanges, "Use only after reviewing missing mods, downgrades, and replacements in the Validation report. This approval applies to one request.");
         tips.SetToolTip(channel, "release: stable API releases only. beta: release and beta. all: includes alpha. A pinned file is an explicit override.");
+        tips.SetToolTip(excludePrereleases, "Exclude alpha, beta, snapshot, RC and other prerelease builds using API labels, filenames and JAR versions. Applies to dependencies and pinned files. No prerelease fallback.");
+        excludePrereleases.CheckedChanged += (_, _) => ApplyPrereleasePolicy();
 
         var profile = Table(7);
         foreach (var width in new float[] { 120, 110, 110, 110, 110, 110 }) profile.ColumnStyles.Add(new(SizeType.Absolute, width));
@@ -150,7 +153,7 @@ public sealed class MainForm : Form
         baselineRow.Controls.Add(chooseInstalled, 2, 0);
         root.Controls.Add(baselineRow, 0, 4);
         var policy = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty, AutoScroll = true };
-        policy.Controls.AddRange([dependencies, refresh, allowReviewedChanges]);
+        policy.Controls.AddRange([excludePrereleases, dependencies, refresh, allowReviewedChanges]);
         root.Controls.Add(policy, 0, 5);
 
         var split = new SplitContainer
@@ -162,8 +165,9 @@ public sealed class MainForm : Form
         split.Panel2.Controls.Add(BuildBasket());
         root.Controls.Add(split, 0, 6);
         root.Controls.Add(BuildFooter(), 0, 7);
-        lockedDuringDownload.AddRange([serverAddress, serverToken, check, minecraftVersion, forgeVersion, channel, dependencies, refresh, output, browse, installedFolder, chooseInstalled, allowReviewedChanges]);
+        lockedDuringDownload.AddRange([serverAddress, serverToken, check, minecraftVersion, forgeVersion, channel, excludePrereleases, dependencies, refresh, output, browse, installedFolder, chooseInstalled, allowReviewedChanges]);
         LoadSettings();
+        ApplyPrereleasePolicy();
         PopulateForgeVersions();
         if (args.Length == 1 && File.Exists(args[0])) ImportFile(args[0]);
         Shown += async (_, _) => await InitializeBrowserAsync();
@@ -192,6 +196,13 @@ public sealed class MainForm : Form
         Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(3, 0, 6, 0), AutoEllipsis = true
     };
     private static TableLayoutPanel Table(int columns) => new() { Dock = DockStyle.Fill, ColumnCount = columns, RowCount = 1, Margin = Padding.Empty };
+
+    private void ApplyPrereleasePolicy()
+    {
+        if (excludePrereleases.Checked) channel.SelectedItem = "release";
+        channel.Enabled = !busy && !excludePrereleases.Checked;
+        allowReviewedChanges.Checked = false;
+    }
 
     protected override void OnLoad(EventArgs e)
     {
@@ -557,6 +568,7 @@ public sealed class MainForm : Form
                 minecraftVersion.Text.Trim(), channel.Text, dependencies.Checked, refresh.Checked)
             {
                 ForgeVersion = forgeVersion.Text.Trim(), InstalledFiles = baseline,
+                ExcludePrereleases = excludePrereleases.Checked,
                 AllowReviewedChanges = allowReviewedChanges.Checked
             };
             SaveSettings();
@@ -647,6 +659,7 @@ public sealed class MainForm : Form
             allowReviewedChanges.Checked = false;
             progress.Style = ProgressBarStyle.Continuous;
             foreach (var control in lockedDuringDownload) control.Enabled = true;
+            ApplyPrereleasePolicy();
         }
     }
 
@@ -674,6 +687,7 @@ public sealed class MainForm : Form
                 WriteLog("Release-only is now the default. Select beta or all explicitly if needed.");
             }
             dependencies.Checked = settings.Dependencies;
+            excludePrereleases.Checked = settings.ExcludePrereleases;
             customOutput = settings.CustomOutput;
             if (customOutput) output.Text = settings.Output;
             else SetDefaultOutput();
@@ -691,7 +705,7 @@ public sealed class MainForm : Form
             Directory.CreateDirectory(AppDirectory);
             var settings = new ClientSettings(serverAddress.Text, minecraftVersion.Text, channel.Text,
                 dependencies.Checked, output.Text, customOutput, basket.Items.Cast<ProjectItem>().Select(x => x.Url).ToArray())
-            { ForgeVersion = forgeVersion.Text, InstalledFolder = installedFolder.Text, SelectionPolicyVersion = 2 };
+            { ForgeVersion = forgeVersion.Text, InstalledFolder = installedFolder.Text, SelectionPolicyVersion = 3, ExcludePrereleases = excludePrereleases.Checked };
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, Protocol.Json));
         }
         catch (Exception error) { WriteLog("Could not save settings: " + error.Message); }
@@ -707,5 +721,6 @@ public sealed class MainForm : Form
         public string ForgeVersion { get; init; } = "";
         public string InstalledFolder { get; init; } = "";
         public int SelectionPolicyVersion { get; init; }
+        public bool ExcludePrereleases { get; init; } = true;
     }
 }

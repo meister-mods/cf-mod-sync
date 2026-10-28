@@ -40,6 +40,7 @@ type ServerOptions struct {
 var upstreamURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
 
 type JobRequest struct {
+	ExcludePrereleases   bool            `json:"exclude_prereleases"`
 	ForgeVersion         string          `json:"forge_version,omitempty"`
 	InstalledFiles       []InstalledFile `json:"installed_files,omitempty"`
 	AllowReviewedChanges bool            `json:"allow_reviewed_changes,omitempty"`
@@ -57,23 +58,24 @@ type JobFile struct {
 }
 
 type JobSnapshot struct {
-	ForgeVersion      string               `json:"forge_version,omitempty"`
-	RequestedProjects []string             `json:"requested_projects"`
-	Detail            string               `json:"detail,omitempty"`
-	Warnings          []Issue              `json:"warnings,omitempty"`
-	Compatibility     *CompatibilityReport `json:"compatibility,omitempty"`
-	ID                string               `json:"id"`
-	State             string               `json:"state"`
-	CreatedAt         time.Time            `json:"created_at"`
-	UpdatedAt         time.Time            `json:"updated_at"`
-	MinecraftVersion  string               `json:"minecraft_version"`
-	ReleaseChannel    string               `json:"release_channel"`
-	Total             int                  `json:"total"`
-	Completed         int                  `json:"completed"`
-	CacheHits         int                  `json:"cache_hits"`
-	SelectionCached   bool                 `json:"selection_cached"`
-	Files             []JobFile            `json:"files"`
-	Errors            []Issue              `json:"errors"`
+	ExcludePrereleases bool                 `json:"exclude_prereleases"`
+	ForgeVersion       string               `json:"forge_version,omitempty"`
+	RequestedProjects  []string             `json:"requested_projects"`
+	Detail             string               `json:"detail,omitempty"`
+	Warnings           []Issue              `json:"warnings,omitempty"`
+	Compatibility      *CompatibilityReport `json:"compatibility,omitempty"`
+	ID                 string               `json:"id"`
+	State              string               `json:"state"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+	MinecraftVersion   string               `json:"minecraft_version"`
+	ReleaseChannel     string               `json:"release_channel"`
+	Total              int                  `json:"total"`
+	Completed          int                  `json:"completed"`
+	CacheHits          int                  `json:"cache_hits"`
+	SelectionCached    bool                 `json:"selection_cached"`
+	Files              []JobFile            `json:"files"`
+	Errors             []Issue              `json:"errors"`
 }
 
 type serverJob struct {
@@ -347,7 +349,7 @@ func (s *modServer) createJob(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(s.ctx, time.Hour)
 	job := &serverJob{cancel: cancel, data: JobSnapshot{
 		ID: hex.EncodeToString(random[:]), State: "queued", CreatedAt: now, UpdatedAt: now,
-		MinecraftVersion: request.MinecraftVersion, ReleaseChannel: request.ReleaseChannel,
+		MinecraftVersion: request.MinecraftVersion, ReleaseChannel: request.ReleaseChannel, ExcludePrereleases: request.ExcludePrereleases,
 		ForgeVersion: request.ForgeVersion, RequestedProjects: append([]string{}, slugs...),
 		Files: []JobFile{}, Errors: []Issue{},
 	}}
@@ -410,7 +412,8 @@ func (s *modServer) runJob(ctx context.Context, job *serverJob, request JobReque
 	job.mu.Unlock()
 	options := Options{
 		Version: request.MinecraftVersion, ForgeVersion: request.ForgeVersion, Channel: request.ReleaseChannel,
-		Deps: request.IncludeDependencies == nil || *request.IncludeDependencies, Workers: s.cfg.Workers,
+		ExcludePrereleases: request.ExcludePrereleases,
+		Deps:               request.IncludeDependencies == nil || *request.IncludeDependencies, Workers: s.cfg.Workers,
 		PinnedFiles: request.pins, CandidateLimit: s.cfg.CandidateLimit, AllowReviewedChanges: request.AllowReviewedChanges,
 		Progress: func(detail string) {
 			job.mu.Lock()

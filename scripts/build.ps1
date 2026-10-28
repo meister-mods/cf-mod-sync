@@ -25,14 +25,19 @@ try {
     $env:GOCACHE = Join-Path $workspace ".build/go-build-cache"
     $clientProject = "client/CfModSync.Client/CfModSync.Client.csproj"
     $checksProject = "client/CfModSync.Client.Checks/CfModSync.Client.Checks.csproj"
+    # Keep builds separate from running clients and previous publishes.
+    $buildRoot = Join-Path $workspace (".build/build-" + [Guid]::NewGuid().ToString("N"))
+    $clientBuild = Join-Path $buildRoot "client"
+    $checksBuild = Join-Path $buildRoot "checks"
     foreach ($project in @($clientProject, $checksProject)) {
         $restoreArgs = @("restore", $project, "-p:NuGetAudit=false")
         if ($PackageSource) { $restoreArgs += @("--source", $PackageSource) }
         Invoke-Checked -Command "dotnet" -Arguments $restoreArgs
-        Invoke-Checked -Command "dotnet" -Arguments @("build", $project, "-c", "Release", "--no-restore")
+        $projectOutput = if ($project -eq $clientProject) { $clientBuild } else { $checksBuild }
+        Invoke-Checked -Command "dotnet" -Arguments @("build", $project, "-c", "Release", "--no-restore", "-o", $projectOutput)
     }
     if (-not $SkipTests) {
-        $env:CFMODSYNC_CLIENT_CHECKS = Join-Path $workspace "client/CfModSync.Client.Checks/bin/Release/net10.0/CfModSync.Client.Checks.dll"
+        $env:CFMODSYNC_CLIENT_CHECKS = Join-Path $checksBuild "CfModSync.Client.Checks.dll"
         Invoke-Checked -Command "dotnet" -Arguments @($env:CFMODSYNC_CLIENT_CHECKS)
         $testArgs = @("-C", "server", "test", "./...")
         if ($Race) { $testArgs = @("-C", "server", "test", "-race", "./...") }
@@ -48,7 +53,7 @@ try {
     $stagedClient = Join-Path $staging "client"
     New-Item -ItemType Directory -Path $stagedServer, $stagedClient -Force | Out-Null
     Invoke-Checked -Command "go" -Arguments @("-C", "server", "build", "-mod=readonly", "-trimpath", "-o", "$stagedServer/cfmodsync.exe", ".")
-    Invoke-Checked -Command "dotnet" -Arguments @("publish", $clientProject, "-c", "Release", "--no-restore", "-o", $stagedClient)
+    Invoke-Checked -Command "dotnet" -Arguments @("publish", $clientProject, "-c", "Release", "--no-build", "--no-restore", "-p:OutputPath=$clientBuild/", "-o", $stagedClient)
     Copy-Item -LiteralPath "server/.env.example" -Destination "$stagedServer/.env.example" -Force
     Copy-Item -LiteralPath "scripts/Start-Server.ps1" -Destination "$stagedServer/Start-Server.ps1" -Force
     Copy-Item -LiteralPath "client/.mods.example" -Destination "$stagedClient/.mods.example" -Force

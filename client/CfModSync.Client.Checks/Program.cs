@@ -44,7 +44,7 @@ if (args.Length != 0)
     var ct = cancellation.Token;
     using var api = new ServerClient(args[0], args[1]);
     await api.CheckAsync(ct);
-    var request = new JobRequest([parsed[0]], "1.20.1", "all", true, false);
+    var request = new JobRequest([parsed[0]], "1.20.1", "all", true, false) { ExcludePrereleases = true };
     var job = await api.CreateJobAsync(request, ct);
     while (!job.IsTerminal)
     {
@@ -52,6 +52,7 @@ if (args.Length != 0)
         job = await api.GetJobAsync(job.Id, ct);
     }
     Require(job.State == "completed" && job.Files.Length == 2, "Go job protocol or dependency selection failed");
+    Require(job.ExcludePrereleases, "server did not retain the prerelease exclusion policy");
     var local = new List<JarFile>();
     foreach (var file in job.Files)
     {
@@ -65,6 +66,7 @@ if (args.Length != 0)
     {
         Require(manifest.RootElement.GetProperty("schema_version").GetInt32() == 1, "wrong manifest schema");
         Require(manifest.RootElement.GetProperty("entries").GetArrayLength() == 2, "manifest entries missing");
+        Require(manifest.RootElement.GetProperty("exclude_prereleases").GetBoolean(), "manifest omitted prerelease policy");
     }
     var goodManifest = await File.ReadAllBytesAsync(Path.Combine(output, "manifest.json"), ct);
     var failedId = new string('a', 32);

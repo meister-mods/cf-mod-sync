@@ -18,10 +18,12 @@ public sealed record JobRequest(
     public string ForgeVersion { get; init; } = "";
     public InstalledFile[] InstalledFiles { get; init; } = [];
     public bool AllowReviewedChanges { get; init; }
+    public bool ExcludePrereleases { get; init; }
 }
 
 public sealed record JobSnapshot
 {
+    public bool ExcludePrereleases { get; init; }
     public string ForgeVersion { get; init; } = "";
     public string[] RequestedProjects { get; init; } = [];
     public string Detail { get; init; } = "";
@@ -72,6 +74,7 @@ public sealed record ClientManifest(
     int SchemaVersion, string GeneratedAt, string MinecraftVersion, string ModLoader,
     string ReleaseChannel, JarFile[] Entries, JobIssue[] Errors)
 {
+    public bool ExcludePrereleases { get; init; }
     public string ForgeVersion { get; init; } = "";
     public string[] RequestedProjects { get; init; } = [];
     public JobIssue[] Warnings { get; init; } = [];

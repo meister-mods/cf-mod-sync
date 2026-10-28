@@ -24,6 +24,7 @@ type Options struct {
 	Progress             func(string)
 	Version              string
 	Channel              string
+	ExcludePrereleases   bool
 	Input                string
 	Output               string
 	Deps                 bool
@@ -62,17 +63,18 @@ type Entry struct {
 }
 
 type Manifest struct {
-	ForgeVersion      string               `json:"forge_version,omitempty"`
-	RequestedProjects []string             `json:"requested_projects,omitempty"`
-	Warnings          []Issue              `json:"warnings,omitempty"`
-	Compatibility     *CompatibilityReport `json:"compatibility,omitempty"`
-	SchemaVersion     int                  `json:"schema_version"`
-	GeneratedAt       string               `json:"generated_at"`
-	MinecraftVersion  string               `json:"minecraft_version"`
-	ModLoader         string               `json:"mod_loader"`
-	ReleaseChannel    string               `json:"release_channel"`
-	Entries           []Entry              `json:"entries"`
-	Errors            []Issue              `json:"errors,omitempty"`
+	ExcludePrereleases bool                 `json:"exclude_prereleases"`
+	ForgeVersion       string               `json:"forge_version,omitempty"`
+	RequestedProjects  []string             `json:"requested_projects,omitempty"`
+	Warnings           []Issue              `json:"warnings,omitempty"`
+	Compatibility      *CompatibilityReport `json:"compatibility,omitempty"`
+	SchemaVersion      int                  `json:"schema_version"`
+	GeneratedAt        string               `json:"generated_at"`
+	MinecraftVersion   string               `json:"minecraft_version"`
+	ModLoader          string               `json:"mod_loader"`
+	ReleaseChannel     string               `json:"release_channel"`
+	Entries            []Entry              `json:"entries"`
+	Errors             []Issue              `json:"errors,omitempty"`
 }
 
 type selected struct {
@@ -153,13 +155,35 @@ func resolveMods(ctx context.Context, c *Client, slugs []string, cfg Options) ([
 			continue
 		}
 		var f File
+		channel := cfg.Channel
+		if cfg.ExcludePrereleases {
+			channel = "release"
+		}
 		if pin := cfg.PinnedFiles[mod.Slug]; pin > 0 {
 			f, err = c.getFile(ctx, mod.ID, pin)
 			if err == nil {
-				f, err = selectLatest([]File{f}, cfg.Version, "all")
+				pinnedChannel := "all"
+				if cfg.ExcludePrereleases {
+					pinnedChannel = "release"
+				}
+				f, err = selectLatest([]File{f}, cfg.Version, pinnedChannel)
 			}
 		} else {
-			f, err = selectLatest(files, cfg.Version, cfg.Channel)
+			if cfg.ExcludePrereleases {
+				stable := files[:0]
+				for _, file := range files {
+					if prereleaseReason(releaseName(file.ReleaseType), file.FileName, nil) == "" {
+						stable = append(stable, file)
+					}
+				}
+				files = stable
+			}
+			f, err = selectLatest(files, cfg.Version, channel)
+		}
+		if err == nil && cfg.ExcludePrereleases {
+			if reason := prereleaseReason(releaseName(f.ReleaseType), f.FileName, nil); reason != "" {
+				err = fmt.Errorf("Prerelease excluded: %s", reason)
+			}
 		}
 		if err != nil {
 			issues = append(issues, Issue{Project: mod.Slug, Error: err.Error()})
@@ -214,8 +238,9 @@ func newManifest(cfg Options) Manifest {
 	return Manifest{
 		SchemaVersion: 1, GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		MinecraftVersion: cfg.Version, ModLoader: "Forge", ReleaseChannel: cfg.Channel,
-		ForgeVersion: cfg.ForgeVersion,
-		Entries:      []Entry{},
+		ForgeVersion:       cfg.ForgeVersion,
+		ExcludePrereleases: cfg.ExcludePrereleases,
+		Entries:            []Entry{},
 	}
 }
 
@@ -392,7 +417,7 @@ func verifyManifest(output string, m Manifest, maxBytes int64) []Issue {
 			count++
 		}
 	}
-	report := validateCompatibility(inspected, Options{Version: m.MinecraftVersion, ForgeVersion: m.ForgeVersion}, nil, false)
+	report := validateCompatibility(inspected, Options{Version: m.MinecraftVersion, ForgeVersion: m.ForgeVersion, ExcludePrereleases: m.ExcludePrereleases}, nil, false)
 	issues = append(issues, report.Errors...)
 	fmt.Printf("Verified %d files; issues: %d\n", count, len(issues))
 	return issues

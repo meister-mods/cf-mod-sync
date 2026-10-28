@@ -41,7 +41,20 @@ func filenameFamily(name string) string {
 
 var forgeModID = regexp.MustCompile("^[a-z][a-z0-9_]{1,63}$")
 
-var prereleaseVersion = regexp.MustCompile(`(?i)(?:^|[0-9._+-])(alpha|beta|snapshot|rc|milestone|preview|pre|dev)(?:$|[0-9._+-])`)
+var prereleaseVersion = regexp.MustCompile(`(?i)(?:^|[0-9._+-])(alpha|beta|snapshot|rc|cr|milestone|preview|pre[._-]?release|pre|dev|nightly|canary|experimental|ea|eap)(?:$|[0-9._+-])`)
+
+func prereleaseReason(releaseType, filename string, metadata *JarMetadata) string {
+	if releaseType != "" && releaseType != "release" {
+		return "API release type is " + releaseType
+	}
+	if kind := metadataPrerelease(metadata); kind != "" {
+		return "JAR declares a " + kind + " version"
+	}
+	if match := prereleaseVersion.FindStringSubmatch(filename); len(match) > 1 {
+		return "filename declares a " + strings.ToLower(match[1]) + " version"
+	}
+	return ""
+}
 
 func metadataPrerelease(metadata *JarMetadata) string {
 	if metadata == nil {
@@ -512,6 +525,11 @@ func validateCompatibility(entries []Entry, cfg Options, baseline []InstalledFil
 			continue
 		}
 		report.CheckedFiles++
+		if cfg.ExcludePrereleases {
+			if reason := prereleaseReason(entry.ReleaseType, entry.Filename, entry.Metadata); reason != "" {
+				report.Errors = append(report.Errors, Issue{entry.Slug, "Prerelease excluded: " + reason + ". Disable Exclude prereleases to allow this file."})
+			}
+		}
 		if kind := metadataPrerelease(entry.Metadata); kind != "" {
 			report.Warnings = append(report.Warnings, Issue{entry.Slug, "Declared " + kind + " mod version; this is a prerelease build."})
 		}
